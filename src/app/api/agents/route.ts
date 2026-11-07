@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { getDb, initDb } from '@/lib/db';
+import { DEFAULT_AGENTS } from '@/lib/default-agents';
 
 function getAgentsDir(): string {
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
@@ -81,11 +82,32 @@ export async function GET() {
   if (sql) {
     try {
       await initDb();
-      const rows = await sql`
+      let rows = await sql`
         SELECT name, title, content, file_name, source_url, license, created_at, updated_at
         FROM agents
-        ORDER BY id DESC;
+        ORDER BY id ASC;
       `;
+
+      // Se o banco Neon foi criado agora e estiver vazio, auto-popula com os agentes padrão!
+      if (!rows || rows.length === 0) {
+        for (const def of DEFAULT_AGENTS) {
+          const details = parseAgentDetails(def.content, def.name);
+          try {
+            await sql`
+              INSERT INTO agents (name, title, content, file_name, source_url, license, updated_at)
+              VALUES (${def.name}, ${details.title}, ${def.content}, ${def.fileName}, 'builtin', 'MIT', CURRENT_TIMESTAMP)
+              ON CONFLICT (name) DO NOTHING;
+            `;
+          } catch {
+            // ignore
+          }
+        }
+        rows = await sql`
+          SELECT name, title, content, file_name, source_url, license, created_at, updated_at
+          FROM agents
+          ORDER BY id ASC;
+        `;
+      }
 
       if (rows && rows.length > 0) {
         const agents = rows.map((r) => {
@@ -108,44 +130,76 @@ export async function GET() {
         return NextResponse.json({ agents, databaseConnected: true });
       }
     } catch (dbErr) {
-      console.warn('Aviso: Erro ao consultar Neon DB, usando arquivos locais:', dbErr);
+      console.warn('Aviso: Erro ao consultar Neon DB, usando arquivos locais ou padrão:', dbErr);
     }
   }
 
   // 2. Fallback to local files in agents/
   try {
     const dir = ensureAgentsDir();
-    if (!fs.existsSync(dir)) {
-      return NextResponse.json({ agents: [], databaseConnected: !!sql });
+    let agents: any[] = [];
+
+    if (fs.existsSync(dir)) {
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+      agents = files.map((fileName) => {
+        try {
+          const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
+          const content = fs.readFileSync(/*turbopackIgnore: true*/ filePath, 'utf-8');
+          const name = fileName.replace(/\.md$/, '');
+          const details = parseAgentDetails(content, name);
+
+          return {
+            name,
+            fileName,
+            title: details.title,
+            whatItDoes: details.whatItDoes,
+            whenToUse: details.whenToUse,
+            tags: details.tags,
+            content,
+            chatCommand: `/${name}`,
+            database: 'Local File',
+          };
+        } catch {
+          return null;
+        }
+      }).filter(Boolean);
     }
 
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
-    const agents = files.map((fileName) => {
-      try {
-        const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
-        const content = fs.readFileSync(/*turbopackIgnore: true*/ filePath, 'utf-8');
-        const name = fileName.replace(/\.md$/, '');
-        const details = parseAgentDetails(content, name);
-
+    // Se não encontrou arquivos no disco local (ex: ambiente serverless), usa os DEFAULT_AGENTS embutidos
+    if (agents.length === 0) {
+      agents = DEFAULT_AGENTS.map((def) => {
+        const details = parseAgentDetails(def.content, def.name);
         return {
-          name,
-          fileName,
+          name: def.name,
+          fileName: def.fileName,
           title: details.title,
           whatItDoes: details.whatItDoes,
           whenToUse: details.whenToUse,
           tags: details.tags,
-          content,
-          chatCommand: `/${name}`,
-          database: 'Local File',
+          content: def.content,
+          chatCommand: `/${def.name}`,
+          database: 'Built-in Fallback',
         };
-      } catch {
-        return null;
-      }
-    }).filter(Boolean);
+      });
+    }
 
     return NextResponse.json({ agents, databaseConnected: !!sql });
   } catch {
-    return NextResponse.json({ agents: [], databaseConnected: !!sql });
+    const fallbackAgents = DEFAULT_AGENTS.map((def) => {
+      const details = parseAgentDetails(def.content, def.name);
+      return {
+        name: def.name,
+        fileName: def.fileName,
+        title: details.title,
+        whatItDoes: details.whatItDoes,
+        whenToUse: details.whenToUse,
+        tags: details.tags,
+        content: def.content,
+        chatCommand: `/${def.name}`,
+        database: 'Built-in Fallback',
+      };
+    });
+    return NextResponse.json({ agents: fallbackAgents, databaseConnected: !!sql });
   }
 }
 

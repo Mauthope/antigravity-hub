@@ -51,3 +51,47 @@ export async function initDb() {
     console.warn('Aviso: Falha ao inicializar tabela no Neon:', err);
   }
 }
+
+export async function checkDbStatus() {
+  const connectionString =
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.NEON_DATABASE_URL;
+
+  if (!connectionString) {
+    return {
+      connected: false,
+      configured: false,
+      message: 'DATABASE_URL não foi encontrada nas variáveis de ambiente da Vercel.',
+    };
+  }
+
+  const sql = getDb();
+  if (!sql) {
+    return {
+      connected: false,
+      configured: true,
+      message: 'Driver Neon não pôde ser instanciado.',
+    };
+  }
+
+  try {
+    await initDb();
+    const result = await sql`SELECT NOW() as now, count(*)::int as count FROM agents;`;
+    return {
+      connected: true,
+      configured: true,
+      timestamp: result[0]?.now,
+      agentCount: result[0]?.count ?? 0,
+      message: 'Conexão com Neon PostgreSQL ativa e saudável.',
+    };
+  } catch (err) {
+    return {
+      connected: false,
+      configured: true,
+      error: err instanceof Error ? err.message : String(err),
+      message: 'Falha ao executar query no Neon PostgreSQL.',
+    };
+  }
+}
+

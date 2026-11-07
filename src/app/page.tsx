@@ -23,6 +23,9 @@ import {
   Palette,
   Cloud,
   X,
+  HelpCircle,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-react';
 import { GlassCapsuleButton } from '@/components/ui/glass-capsule-button';
 import { SquircleKpiCard } from '@/components/ui/squircle-kpi-card';
@@ -58,9 +61,19 @@ export default function HomePage() {
     message: string;
   } | null>(null);
 
-  // Active Preview Modal
+  // Modals & Diagnostic States
   const [previewAgent, setPreviewAgent] = useState<AgentMd | null>(null);
+  const [showNeonModal, setShowNeonModal] = useState(false);
+  const [showAntigravityGuide, setShowAntigravityGuide] = useState(false);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
+  const [dbDetails, setDbDetails] = useState<{
+    connected: boolean;
+    configured: boolean;
+    message: string;
+    agentCount?: number;
+    error?: string;
+  } | null>(null);
+  const [isCheckingDb, setIsCheckingDb] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -98,6 +111,22 @@ export default function HomePage() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
     } catch {
       // ignore
+    }
+  };
+
+  const checkNeonStatus = async () => {
+    setIsCheckingDb(true);
+    try {
+      const res = await fetch('/api/db-status');
+      if (res.ok) {
+        const data = await res.json();
+        setDbDetails(data);
+        setDbConnected(!!data.connected);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsCheckingDb(false);
     }
   };
 
@@ -140,6 +169,7 @@ export default function HomePage() {
 
   useEffect(() => {
     fetchAgents();
+    checkNeonStatus();
   }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -339,22 +369,36 @@ export default function HomePage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* Database Badge */}
+            {/* Database Badge Button */}
             {dbConnected ? (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+              <button
+                onClick={() => setShowNeonModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 transition-colors cursor-pointer"
+                title="Neon PostgreSQL conectado. Clique para ver detalhes da conexão."
+              >
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <Database className="w-3.5 h-3.5" strokeWidth={2} />
-                Neon DB: agents_mpg
-              </div>
+                Neon: agents_mpg (Ativo)
+              </button>
             ) : (
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25 cursor-help"
-                title="Adicione DATABASE_URL na Vercel para sincronizar com seu projeto Neon"
+              <button
+                onClick={() => setShowNeonModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                title="Clique para ver instruções de conexão com o Neon no Vercel"
               >
                 <Database className="w-3.5 h-3.5" strokeWidth={2} />
-                Neon: Configure DATABASE_URL
-              </div>
+                Neon: Configurar Conexão
+              </button>
             )}
+
+            {/* Antigravity Guide Button */}
+            <button
+              onClick={() => setShowAntigravityGuide(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/25 hover:bg-indigo-500/20 transition-colors cursor-pointer"
+            >
+              <Terminal className="w-3.5 h-3.5" strokeWidth={2} />
+              Como Chamar no Chat
+            </button>
 
             {/* License Shield Badge */}
             <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border border-cyan-500/25">
@@ -757,6 +801,226 @@ export default function HomePage() {
                 icon={<Copy className="w-4 h-4" strokeWidth={2} />}
               >
                 Copiar Markdown Completo
+              </GlassCapsuleButton>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEON DATABASE MODAL */}
+      {showNeonModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="glow-card max-w-2xl w-full p-6 sm:p-8 space-y-6 shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center justify-center">
+                  <Database className="w-5 h-5" strokeWidth={2} />
+                </div>
+                <div>
+                  <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
+                    Conexão Neon PostgreSQL (agents_mpg)
+                  </h3>
+                  <span className="text-xs text-slate-500">Persistência contínua na nuvem</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowNeonModal(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" strokeWidth={2} />
+              </button>
+            </div>
+
+            {/* Live Status Card */}
+            <div className={`p-4 rounded-2xl border text-xs space-y-2 ${
+              dbConnected
+                ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-800 dark:text-emerald-200'
+                : 'bg-amber-500/10 border-amber-500/25 text-amber-800 dark:text-amber-200'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-heading font-bold text-sm">
+                  {dbConnected ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500" strokeWidth={2} />
+                      Conectado ao Neon PostgreSQL
+                    </>
+                  ) : (
+                    <>
+                      <Database className="w-4 h-4 text-amber-500" strokeWidth={2} />
+                      Modo Fallback Ativo (DATABASE_URL não configurada)
+                    </>
+                  )}
+                </div>
+                <button
+                  onClick={checkNeonStatus}
+                  disabled={isCheckingDb}
+                  className="px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-[11px] font-heading font-bold flex items-center gap-1.5 hover:border-cyan-500 transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isCheckingDb ? 'animate-spin' : ''}`} strokeWidth={2} />
+                  {isCheckingDb ? 'Testando...' : 'Testar Conexão'}
+                </button>
+              </div>
+              {dbDetails?.message && (
+                <p className="text-xs opacity-90">{dbDetails.message}</p>
+              )}
+              {dbDetails?.agentCount !== undefined && (
+                <p className="text-[11px] font-mono">Agentes salvos no banco Neon: {dbDetails.agentCount}</p>
+              )}
+            </div>
+
+            {/* Step-by-Step Instructions */}
+            <div className="space-y-4 text-xs text-slate-700 dark:text-slate-300">
+              <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
+                Como Ativar no Vercel em 3 Passos:
+              </h4>
+
+              <div className="space-y-3">
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                  <span className="font-heading font-bold text-cyan-600 dark:text-cyan-400 block">
+                    1. Copie a Connection String no Neon
+                  </span>
+                  <p className="text-slate-600 dark:text-slate-400">
+                    Acesse seu painel no Neon, abra o projeto <strong className="text-slate-800 dark:text-white">agents_mpg</strong> e copie a URL de conexão (formato <code className="font-mono text-cyan-600 dark:text-cyan-300">postgresql://...</code>).
+                  </p>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                  <span className="font-heading font-bold text-cyan-600 dark:text-cyan-400 block">
+                    2. Adicione na Vercel
+                  </span>
+                  <p className="text-slate-600 dark:text-slate-400">
+                    Na Vercel, acesse: <strong className="text-slate-800 dark:text-white">Seu Projeto &gt; Settings &gt; Environment Variables</strong>.
+                  </p>
+                  <p className="text-slate-600 dark:text-slate-400">
+                    Nome da variável: <code className="font-mono font-bold text-emerald-600 dark:text-emerald-400">DATABASE_URL</code>
+                  </p>
+                  <p className="text-slate-600 dark:text-slate-400">
+                    Valor: cole a Connection String copiada do Neon.
+                  </p>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
+                  <span className="font-heading font-bold text-cyan-600 dark:text-cyan-400 block">
+                    3. Redeploy
+                  </span>
+                  <p className="text-slate-600 dark:text-slate-400">
+                    Clique em <strong className="text-slate-800 dark:text-white">Redeploy</strong> na Vercel. A aplicação criará a tabela automaticamente e salvará todos os seus agentes no Neon!
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <GlassCapsuleButton
+                variant="cyan"
+                size="md"
+                onClick={() => setShowNeonModal(false)}
+              >
+                Entendi, Fechar
+              </GlassCapsuleButton>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ANTIGRAVITY CHAT GUIDE MODAL */}
+      {showAntigravityGuide && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="glow-card max-w-2xl w-full p-6 sm:p-8 space-y-6 shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 flex items-center justify-center">
+                  <Terminal className="w-5 h-5" strokeWidth={2} />
+                </div>
+                <div>
+                  <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
+                    Como Usar no Chat do Antigravity
+                  </h3>
+                  <span className="text-xs text-slate-500">Invocação nativa em qualquer projeto</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAntigravityGuide(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" strokeWidth={2} />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs text-slate-700 dark:text-slate-300">
+              {/* Option 1: Slash Command */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-heading font-bold bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20 uppercase">
+                    Método 1 (Recomendado)
+                  </span>
+                  <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
+                    Comando de Barra Imediato
+                  </h4>
+                </div>
+                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Em qualquer conversa do Antigravity, basta digitar a barra seguida do nome do agente:
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1 font-mono font-bold">
+                  <span className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-900 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30">
+                    /designer-arvoredo-master
+                  </span>
+                  <span className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-900 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30">
+                    /code-reviewer
+                  </span>
+                  <span className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-900 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30">
+                    /cloud-architect
+                  </span>
+                </div>
+              </div>
+
+              {/* Option 2: Natural Language */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-heading font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 uppercase">
+                    Método 2
+                  </span>
+                  <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
+                    Linguagem Natural no Chat
+                  </h4>
+                </div>
+                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Você também pode falar normalmente com o Antigravity:
+                </p>
+                <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 italic font-mono text-[11px]">
+                  &quot;Antigravity, atue como o Designer Arvoredo Master para construir a tela de login&quot;
+                </div>
+              </div>
+
+              {/* Option 3: Auto Sync */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-heading font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 uppercase">
+                    Método 3
+                  </span>
+                  <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
+                    Sincronizar Novos Agentes Salvos
+                  </h4>
+                </div>
+                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Quando você subir um novo agente aqui no Hub ou importar do GitHub, basta pedir no chat:
+                </p>
+                <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 italic font-mono text-[11px]">
+                  &quot;Antigravity, instale meus novos agentes salvos no hub&quot;
+                </div>
+                <p className="text-slate-500 text-[11px]">
+                  Os arquivos ficam salvos em seu diretório de configuração persistente, prontos para uso em qualquer workspace.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <GlassCapsuleButton
+                variant="cyan"
+                size="md"
+                onClick={() => setShowAntigravityGuide(false)}
+              >
+                Pronto para Usar
               </GlassCapsuleButton>
             </div>
           </div>
