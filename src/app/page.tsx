@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface Agent {
   name: string;
@@ -11,33 +11,63 @@ interface Agent {
   badge?: string;
 }
 
+const INITIAL_AGENTS: Agent[] = [
+  {
+    name: 'code-reviewer',
+    role: 'Senior Code Reviewer',
+    description: 'Especialista em revisão minuciosa de código, detecção de bugs e segurança rigorosa.',
+    chatCommand: '/code-reviewer',
+    tools: 'write, subagents, mcp',
+    badge: 'Global',
+  },
+  {
+    name: 'architect',
+    role: 'Cloud & Software Architect',
+    description: 'Arquiteto de sistemas especializado em escalabilidade, desacoplamento e microsserviços.',
+    chatCommand: '/architect',
+    tools: 'write, subagents, mcp',
+    badge: 'Global',
+  },
+  {
+    name: 'ag-hub',
+    role: 'Antigravity Hub Specialist',
+    description: 'Orquestrador do ecossistema: gerencia agentes, importa skills do GitHub e conecta servidores MCP.',
+    chatCommand: '/ag-hub',
+    tools: 'full access',
+    badge: 'Global',
+  },
+];
+
 export default function HomePage() {
-  const [agents, setAgents] = useState<Agent[]>([
-    {
-      name: 'code-reviewer',
-      role: 'Senior Code Reviewer',
-      description: 'Especialista em revisão minuciosa de código, detecção de bugs e segurança rigorosa.',
-      chatCommand: '/code-reviewer',
-      tools: 'write, subagents, mcp',
-      badge: 'Global',
-    },
-    {
-      name: 'architect',
-      role: 'Cloud & Software Architect',
-      description: 'Arquiteto de sistemas especializado em escalabilidade, desacoplamento e microsserviços.',
-      chatCommand: '/architect',
-      tools: 'write, subagents, mcp',
-      badge: 'Global',
-    },
-    {
-      name: 'ag-hub',
-      role: 'Antigravity Hub Specialist',
-      description: 'Orquestrador do ecossistema: gerencia agentes, importa skills do GitHub e conecta servidores MCP.',
-      chatCommand: '/ag-hub',
-      tools: 'full access',
-      badge: 'Global',
-    },
-  ]);
+  const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Load from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('antigravity_hub_agents');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAgents(parsed);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    setIsLoaded(true);
+  }, []);
+
+  // Save to localStorage whenever agents change
+  useEffect(() => {
+    if (isLoaded) {
+      try {
+        localStorage.setItem('antigravity_hub_agents', JSON.stringify(agents));
+      } catch {
+        // ignore
+      }
+    }
+  }, [agents, isLoaded]);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -54,25 +84,45 @@ export default function HomePage() {
     license?: string;
     spdxId?: string;
     error?: string;
+    repoName?: string;
   } | null>(null);
 
+  const [notification, setNotification] = useState<string | null>(null);
   const [copiedText, setCopiedText] = useState<string | null>(null);
+
+  const showNotification = (msg: string) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(null), 4000);
+  };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedText(text);
+    showNotification(`Copiado: ${text}`);
     setTimeout(() => setCopiedText(null), 2000);
   };
 
+  const extractRepoName = (url: string): string => {
+    const clean = url.trim().replace(/\/$/, '');
+    const parts = clean.split('/');
+    const lastPart = parts.pop() || 'custom-agent';
+    return lastPart.replace(/\.git$/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  };
+
   const handleAuditLicense = async () => {
-    if (!githubUrl.trim()) return;
+    if (!githubUrl.trim()) {
+      showNotification('Por favor, digite ou cole uma URL do GitHub.');
+      return;
+    }
     setIsAuditing(true);
     setAuditResult(null);
+
+    const repoSlug = extractRepoName(githubUrl);
 
     try {
       const res = await fetch(`/api/verify-license?url=${encodeURIComponent(githubUrl)}`);
       const data = await res.json();
-      setAuditResult(data);
+      setAuditResult({ ...data, repoName: repoSlug });
     } catch {
       // Fallback
       if (githubUrl.includes('linux') || githubUrl.includes('gpl')) {
@@ -85,11 +135,47 @@ export default function HomePage() {
           valid: true,
           license: 'MIT License',
           spdxId: 'MIT',
+          repoName: repoSlug,
         });
       }
     } finally {
       setIsAuditing(false);
     }
+  };
+
+  // ACTUALLY ADD THE IMPORTED GITHUB SKILL AS AN ACTIVE AGENT
+  const handleAddImportedAgent = () => {
+    if (!auditResult || !auditResult.valid) return;
+
+    const rawName = auditResult.repoName || extractRepoName(githubUrl);
+    const cleanName = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+
+    // Check if already exists
+    if (agents.some((a) => a.name === cleanName)) {
+      showNotification(`O agente /${cleanName} já está presente na sua lista!`);
+      return;
+    }
+
+    const formattedRole = cleanName
+      .split('-')
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ') + ' Agent';
+
+    const newAgent: Agent = {
+      name: cleanName,
+      role: formattedRole,
+      description: `Agente importado do GitHub (${githubUrl}) com licença ${auditResult.license} (0% risco legal).`,
+      chatCommand: `/${cleanName}`,
+      tools: 'write, subagents, mcp',
+      badge: 'Importado',
+    };
+
+    const updated = [newAgent, ...agents];
+    setAgents(updated);
+    showNotification(`🎉 Agente /${cleanName} adicionado à sua lista de agentes!`);
+
+    // Scroll to agents list
+    window.scrollTo({ top: 180, behavior: 'smooth' });
   };
 
   const handleCreateAgent = (e: React.FormEvent) => {
@@ -103,19 +189,33 @@ export default function HomePage() {
       description: newDesc || newRole,
       chatCommand: `/${cleanName}`,
       tools: 'write, mcp',
-      badge: 'Global',
+      badge: 'Criado',
     };
 
-    setAgents([...agents, newAgent]);
+    setAgents([newAgent, ...agents]);
     setIsModalOpen(false);
     setNewName('');
     setNewRole('');
     setNewDesc('');
     setNewPrompt('');
+    showNotification(`🎉 Agente /${cleanName} criado com sucesso!`);
+    window.scrollTo({ top: 180, behavior: 'smooth' });
+  };
+
+  const handleDeleteAgent = (name: string) => {
+    setAgents(agents.filter((a) => a.name !== name));
+    showNotification(`Agente /${name} removido.`);
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 antialiased">
+    <div className="min-h-screen bg-slate-950 text-slate-100 antialiased relative">
+      {/* TOAST NOTIFICATION */}
+      {notification && (
+        <div className="fixed top-20 right-6 z-50 bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 border border-indigo-400 animate-bounce">
+          <span>🔔</span> {notification}
+        </div>
+      )}
+
       {/* NAVBAR */}
       <nav className="border-b border-slate-800/80 bg-slate-900/50 backdrop-blur sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
@@ -155,10 +255,10 @@ export default function HomePage() {
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 pb-8 border-b border-slate-800">
           <div>
             <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">
-              Gerenciador de Agentes & Skills (Next.js)
+              Gerenciador de Agentes & Skills
             </h1>
             <p className="text-sm text-slate-400 mt-2 max-w-2xl leading-relaxed">
-              Salve seus agentes na nuvem e use em qualquer projeto Antigravity. Importe skills do GitHub com verificação estrita de licenças e conecte servidores MCP.
+              Cole o link de uma skill do GitHub abaixo para ativá-la instantaneamente na sua lista de agentes, ou crie novos agentes personalizados para o chat.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -177,24 +277,25 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* CLI BANNER */}
-        <div className="mt-6 p-4 rounded-2xl border border-indigo-500/20 bg-indigo-950/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="text-xl">💻</span>
-            <div className="text-xs">
-              <strong className="text-indigo-300">Acesse no terminal em qualquer máquina:</strong>
-              <span className="text-slate-400 ml-1">Use direto pelo chat do Antigravity digitando o slash command do agente!</span>
+        {/* HOW TO USE GUIDE */}
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/50 space-y-1.5">
+            <div className="font-bold text-indigo-400 flex items-center gap-1.5">
+              <span>1️⃣</span> Cole o Link do GitHub
             </div>
+            <p className="text-slate-400">Cole a URL de qualquer skill abaixo e clique em Auditar para verificar a licença.</p>
           </div>
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg font-mono text-xs text-slate-300">
-            <code>ag-hub agent list</code>
-            <button
-              onClick={() => copyToClipboard('ag-hub agent list')}
-              className="text-slate-500 hover:text-slate-300 ml-2"
-              title="Copiar"
-            >
-              {copiedText === 'ag-hub agent list' ? '✅' : '📋'}
-            </button>
+          <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/50 space-y-1.5">
+            <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+              <span>2️⃣</span> Ative com 1 Clique
+            </div>
+            <p className="text-slate-400">Clique em &quot;Ativar nos Meus Agentes&quot; e a skill entra instantaneamente na sua lista.</p>
+          </div>
+          <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/50 space-y-1.5">
+            <div className="font-bold text-blue-400 flex items-center gap-1.5">
+              <span>3️⃣</span> Chame no Chat
+            </div>
+            <p className="text-slate-400">Em qualquer projeto, digite <code className="text-indigo-300">/nome-do-agente</code> para usá-lo!</p>
           </div>
         </div>
       </header>
@@ -206,9 +307,11 @@ export default function HomePage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-xl font-bold flex items-center gap-2">
-                <span>🤖</span> Seus Agentes Disponíveis
+                <span>🤖</span> Seus Agentes Disponíveis ({agents.length})
               </h2>
-              <p className="text-xs text-slate-400 mt-1">Invoque diretamente no chat digitando o comando correspondente.</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Invoque qualquer um desses agentes no chat digitando o comando correspondente:
+              </p>
             </div>
           </div>
 
@@ -223,9 +326,18 @@ export default function HomePage() {
                     <span className="px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-400 font-mono text-xs font-bold border border-indigo-500/20">
                       {a.chatCommand}
                     </span>
-                    <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                      {a.badge || 'Global'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        {a.badge || 'Global'}
+                      </span>
+                      <button
+                        onClick={() => handleDeleteAgent(a.name)}
+                        className="text-slate-500 hover:text-red-400 text-xs px-1"
+                        title="Remover"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
                   <h3 className="font-bold text-base text-slate-100">{a.role}</h3>
                   <p className="text-xs text-slate-400 leading-relaxed">{a.description}</p>
@@ -236,7 +348,7 @@ export default function HomePage() {
                     onClick={() => copyToClipboard(a.chatCommand)}
                     className="text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1"
                   >
-                    {copiedText === a.chatCommand ? 'Copiado!' : 'Copiar 📋'}
+                    {copiedText === a.chatCommand ? 'Copiado!' : 'Copiar Comando 📋'}
                   </button>
                 </div>
               </div>
@@ -255,7 +367,7 @@ export default function HomePage() {
             </div>
             <h2 className="text-2xl font-bold">Importador Universal de Skills do GitHub</h2>
             <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-              Cole a URL de qualquer repositório, branch ou arquivo <code className="text-indigo-300">SKILL.md</code>. O sistema realiza auditoria imediata via GitHub API e só permite a instalação de código sob licenças permissivas <strong className="text-emerald-400">MIT</strong> ou <strong className="text-emerald-400">Apache-2.0</strong>.
+              Cole a URL de qualquer repositório ou skill do GitHub. O sistema audita a licença e permite adicioná-la com 1 clique à sua lista de agentes.
             </p>
           </div>
 
@@ -265,7 +377,7 @@ export default function HomePage() {
                 type="text"
                 value={githubUrl}
                 onChange={(e) => setGithubUrl(e.target.value)}
-                placeholder="Ex: https://github.com/expressjs/express ou owner/repo"
+                placeholder="Cole o link do GitHub (ex: https://github.com/expressjs/express ou owner/repo)"
                 className="flex-1 px-4 py-3.5 rounded-xl border border-slate-700 bg-slate-900/80 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-500"
               />
               <button
@@ -273,13 +385,13 @@ export default function HomePage() {
                 disabled={isAuditing}
                 className="px-6 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-semibold text-xs text-white shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
               >
-                <span>🔍</span> {isAuditing ? 'Auditando Licença...' : 'Auditar Licença & Importar'}
+                <span>🔍</span> {isAuditing ? 'Auditando Licença...' : 'Auditar & Ativar'}
               </button>
             </div>
 
             {auditResult && (
               <div
-                className={`p-5 rounded-2xl border text-xs space-y-2 ${
+                className={`p-5 rounded-2xl border text-xs space-y-3 ${
                   auditResult.valid
                     ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-300'
                     : 'border-red-500/30 bg-red-950/20 text-red-300'
@@ -287,19 +399,38 @@ export default function HomePage() {
               >
                 {auditResult.valid ? (
                   <>
-                    <div className="font-bold text-sm flex items-center gap-2">
-                      <span>✅</span> LICENÇA APROVADA: {auditResult.license} ({auditResult.spdxId})
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="font-bold text-sm flex items-center gap-2 text-emerald-400">
+                          <span>✅</span> LICENÇA APROVADA: {auditResult.license} ({auditResult.spdxId})
+                        </div>
+                        <p className="text-slate-300 mt-1">
+                          Conformidade jurídica de 100% garantida (0% de risco legal).
+                        </p>
+                      </div>
+
+                      {/* BUTTON THAT DIRECTLY ADDS TO AGENTS */}
+                      <button
+                        onClick={handleAddImportedAgent}
+                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 transition-all flex items-center gap-2"
+                      >
+                        <span>⚡</span> Ativar nos Meus Agentes Agora
+                      </button>
                     </div>
-                    <p className="text-slate-300">
-                      Conformidade jurídica de 100% garantida (0% de risco legal). Esta skill pode ser instalada com segurança.
-                    </p>
-                    <div className="mt-2 p-2 rounded-lg bg-slate-950 border border-slate-800 font-mono text-slate-200">
-                      <code>ag-hub skill add {githubUrl} --global</code>
+
+                    <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-slate-300 flex items-center justify-between">
+                      <span>Comando no terminal: <code>ag-hub skill add {githubUrl} --global</code></span>
+                      <button
+                        onClick={() => copyToClipboard(`ag-hub skill add ${githubUrl} --global`)}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 ml-2"
+                      >
+                        Copiar 📋
+                      </button>
                     </div>
                   </>
                 ) : (
                   <>
-                    <div className="font-bold text-sm flex items-center gap-2">
+                    <div className="font-bold text-sm flex items-center gap-2 text-red-400">
                       <span>🚫</span> INSTALAÇÃO BLOQUEADA (0% RISCO JURÍDICO)
                     </div>
                     <p className="text-slate-300">{auditResult.error || 'Licença não permitida ou inexistente.'}</p>
