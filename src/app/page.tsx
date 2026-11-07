@@ -2,583 +2,455 @@
 
 import React, { useState, useEffect } from 'react';
 
-interface Agent {
+interface AgentMd {
   name: string;
-  role: string;
-  description: string;
+  fileName: string;
+  title: string;
+  content: string;
   chatCommand: string;
-  tools?: string;
-  badge?: string;
 }
 
-const INITIAL_AGENTS: Agent[] = [
-  {
-    name: 'code-reviewer',
-    role: 'Senior Code Reviewer',
-    description: 'Especialista em revisão minuciosa de código, detecção de bugs e segurança rigorosa.',
-    chatCommand: '/code-reviewer',
-    tools: 'write, subagents, mcp',
-    badge: 'Global',
-  },
-  {
-    name: 'architect',
-    role: 'Cloud & Software Architect',
-    description: 'Arquiteto de sistemas especializado em escalabilidade, desacoplamento e microsserviços.',
-    chatCommand: '/architect',
-    tools: 'write, subagents, mcp',
-    badge: 'Global',
-  },
-  {
-    name: 'ag-hub',
-    role: 'Antigravity Hub Specialist',
-    description: 'Orquestrador do ecossistema: gerencia agentes, importa skills do GitHub e conecta servidores MCP.',
-    chatCommand: '/ag-hub',
-    tools: 'full access',
-    badge: 'Global',
-  },
-];
-
 export default function HomePage() {
-  const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [agents, setAgents] = useState<AgentMd[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Load from localStorage on mount
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('antigravity_hub_agents');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setAgents(parsed);
-        }
-      }
-    } catch {
-      // ignore
-    }
-    setIsLoaded(true);
-  }, []);
+  // Upload/Manual State
+  const [uploadName, setUploadName] = useState('');
+  const [uploadContent, setUploadContent] = useState('');
 
-  // Save to localStorage whenever agents change
-  useEffect(() => {
-    if (isLoaded) {
-      try {
-        localStorage.setItem('antigravity_hub_agents', JSON.stringify(agents));
-      } catch {
-        // ignore
-      }
-    }
-  }, [agents, isLoaded]);
-
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newRole, setNewRole] = useState('');
-  const [newDesc, setNewDesc] = useState('');
-  const [newPrompt, setNewPrompt] = useState('');
-
-  // Importer State
+  // GitHub Import State
   const [githubUrl, setGithubUrl] = useState('');
-  const [isAuditing, setIsAuditing] = useState(false);
-  const [auditResult, setAuditResult] = useState<{
-    valid?: boolean;
-    license?: string;
-    spdxId?: string;
-    error?: string;
-    repoName?: string;
+  const [isImporting, setIsImporting] = useState(false);
+  const [githubStatus, setGithubStatus] = useState<{
+    type: 'success' | 'error';
+    message: string;
   } | null>(null);
 
-  const [notification, setNotification] = useState<string | null>(null);
-  const [copiedText, setCopiedText] = useState<string | null>(null);
+  // Active Preview Modal
+  const [previewAgent, setPreviewAgent] = useState<AgentMd | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
-  const showNotification = (msg: string) => {
-    setNotification(msg);
-    setTimeout(() => setNotification(null), 4000);
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const fetchAgents = async () => {
+    try {
+      const res = await fetch('/api/agents');
+      const data = await res.json();
+      if (data.agents) {
+        setAgents(data.agents);
+      }
+    } catch {
+      // fallback
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAgents();
+  }, []);
+
+  // Handle file upload (.md file selected from disk)
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const baseName = file.name.replace(/\.md$/i, '');
+    setUploadName(baseName);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      setUploadContent(text);
+      showToast(`Arquivo ${file.name} carregado no formulário!`);
+    };
+    reader.readAsText(file);
+  };
+
+  // Save agent from manual upload or paste
+  const handleSaveManual = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadName.trim() || !uploadContent.trim()) {
+      showToast('Preencha o nome e o conteúdo do markdown.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: uploadName,
+          content: uploadContent,
+        }),
+      });
+
+      if (res.ok) {
+        showToast(`✅ Agente ${uploadName}.md salvo com sucesso!`);
+        setUploadName('');
+        setUploadContent('');
+        fetchAgents();
+      } else {
+        const err = await res.json();
+        showToast(`Erro: ${err.error || 'Falha ao salvar'}`);
+      }
+    } catch (err) {
+      showToast('Erro de conexão ao salvar agente.');
+    }
+  };
+
+  // Save from GitHub repo URL
+  const handleImportGithub = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!githubUrl.trim()) return;
+
+    setIsImporting(true);
+    setGithubStatus(null);
+
+    try {
+      const res = await fetch('/api/import-github', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: githubUrl }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.valid) {
+        // Save to agents API
+        await fetch('/api/agents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: data.name,
+            content: data.content,
+          }),
+        });
+
+        setGithubStatus({
+          type: 'success',
+          message: `✅ Agente '${data.name}.md' importado com sucesso do GitHub! Licença verificada: ${data.license} (0% risco legal).`,
+        });
+        setGithubUrl('');
+        fetchAgents();
+      } else {
+        setGithubStatus({
+          type: 'error',
+          message: data.error || 'Não foi possível importar este repositório.',
+        });
+      }
+    } catch {
+      setGithubStatus({
+        type: 'error',
+        message: 'Falha ao conectar para importar do GitHub.',
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  // Delete agent
+  const handleDelete = async (name: string) => {
+    if (!confirm(`Deseja realmente excluir o agente ${name}.md?`)) return;
+
+    try {
+      const res = await fetch(`/api/agents?name=${name}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast(`🗑️ Agente ${name}.md removido.`);
+        fetchAgents();
+      }
+    } catch {
+      showToast('Falha ao excluir agente.');
+    }
   };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    setCopiedText(text);
-    showNotification(`Copiado: ${text}`);
-    setTimeout(() => setCopiedText(null), 2000);
+    showToast(`Copiado para a área de transferência: ${text}`);
   };
 
-  const extractRepoName = (url: string): string => {
-    const clean = url.trim().replace(/\/$/, '');
-    const parts = clean.split('/');
-    const lastPart = parts.pop() || 'custom-agent';
-    return lastPart.replace(/\.git$/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-  };
-
-  const handleAuditLicense = async () => {
-    if (!githubUrl.trim()) {
-      showNotification('Por favor, digite ou cole uma URL do GitHub.');
-      return;
-    }
-    setIsAuditing(true);
-    setAuditResult(null);
-
-    const repoSlug = extractRepoName(githubUrl);
-
-    try {
-      const res = await fetch(`/api/verify-license?url=${encodeURIComponent(githubUrl)}`);
-      const data = await res.json();
-      setAuditResult({ ...data, repoName: repoSlug });
-    } catch {
-      // Fallback
-      if (githubUrl.includes('linux') || githubUrl.includes('gpl')) {
-        setAuditResult({
-          valid: false,
-          error: 'Detectada licença GPL. Apenas MIT e Apache-2.0 são permitidas (0% risco legal).',
-        });
-      } else {
-        setAuditResult({
-          valid: true,
-          license: 'MIT License',
-          spdxId: 'MIT',
-          repoName: repoSlug,
-        });
-      }
-    } finally {
-      setIsAuditing(false);
-    }
-  };
-
-  // ACTUALLY ADD THE IMPORTED GITHUB SKILL AS AN ACTIVE AGENT
-  const handleAddImportedAgent = () => {
-    if (!auditResult || !auditResult.valid) return;
-
-    const rawName = auditResult.repoName || extractRepoName(githubUrl);
-    const cleanName = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-
-    // Check if already exists
-    if (agents.some((a) => a.name === cleanName)) {
-      showNotification(`O agente /${cleanName} já está presente na sua lista!`);
-      return;
-    }
-
-    const formattedRole = cleanName
-      .split('-')
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ') + ' Agent';
-
-    const newAgent: Agent = {
-      name: cleanName,
-      role: formattedRole,
-      description: `Agente importado do GitHub (${githubUrl}) com licença ${auditResult.license} (0% risco legal).`,
-      chatCommand: `/${cleanName}`,
-      tools: 'write, subagents, mcp',
-      badge: 'Importado',
-    };
-
-    const updated = [newAgent, ...agents];
-    setAgents(updated);
-    showNotification(`🎉 Agente /${cleanName} adicionado à sua lista de agentes!`);
-
-    // Scroll to agents list
-    window.scrollTo({ top: 180, behavior: 'smooth' });
-  };
-
-  const handleCreateAgent = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newName.trim() || !newRole.trim()) return;
-
-    const cleanName = newName.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-    const newAgent: Agent = {
-      name: cleanName,
-      role: newRole,
-      description: newDesc || newRole,
-      chatCommand: `/${cleanName}`,
-      tools: 'write, mcp',
-      badge: 'Criado',
-    };
-
-    setAgents([newAgent, ...agents]);
-    setIsModalOpen(false);
-    setNewName('');
-    setNewRole('');
-    setNewDesc('');
-    setNewPrompt('');
-    showNotification(`🎉 Agente /${cleanName} criado com sucesso!`);
-    window.scrollTo({ top: 180, behavior: 'smooth' });
-  };
-
-  const handleDeleteAgent = (name: string) => {
-    setAgents(agents.filter((a) => a.name !== name));
-    showNotification(`Agente /${name} removido.`);
+  const downloadMd = (agent: AgentMd) => {
+    const blob = new Blob([agent.content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = agent.fileName;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 antialiased relative">
-      {/* TOAST NOTIFICATION */}
-      {notification && (
-        <div className="fixed top-20 right-6 z-50 bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 border border-indigo-400 animate-bounce">
-          <span>🔔</span> {notification}
+    <div className="min-h-screen bg-slate-950 text-slate-100 antialiased p-6 md:p-10 font-sans">
+      {/* TOAST */}
+      {toast && (
+        <div className="fixed top-6 right-6 z-50 bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 border border-indigo-400">
+          <span>🔔</span> {toast}
         </div>
       )}
 
-      {/* NAVBAR */}
-      <nav className="border-b border-slate-800/80 bg-slate-900/50 backdrop-blur sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-indigo-500/20">
-              ⚡
-            </div>
-            <div>
-              <span className="font-bold text-lg tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-200 to-slate-400">
-                Antigravity Hub
-              </span>
-              <span className="hidden sm:inline-block ml-2 px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                Next.js App Router
-              </span>
+      <div className="max-w-6xl mx-auto space-y-10">
+
+        {/* HEADER */}
+        <header className="flex flex-col md:flex-row items-start md:items-center justify-between pb-8 border-b border-slate-800 gap-4">
+          <div>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-600/30">
+                📄
+              </div>
+              <div>
+                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Meus Agentes Markdown (`.md`)</h1>
+                <p className="text-xs md:text-sm text-slate-400 mt-1">
+                  Suba seus arquivos <code className="text-indigo-400">.md</code> ou salve novos diretamente a partir de repositórios do GitHub.
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              0% Risco Legal: MIT & Apache-2.0
+          <div className="flex items-center gap-3">
+            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              🛡️ Apenas MIT & Apache-2.0
             </span>
             <a
-              href="https://github.com/Mauthope/antigravity-hub"
+              href="https://github.com/Mauthope/antigravity-hub/tree/main/agents"
               target="_blank"
               rel="noreferrer"
-              className="px-3.5 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600 bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-slate-300 transition-colors flex items-center gap-2"
+              className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-xs text-slate-300 font-medium transition-colors"
             >
-              GitHub
+              Ver no GitHub ↗
             </a>
           </div>
-        </div>
-      </nav>
+        </header>
 
-      {/* HERO */}
-      <header className="max-w-7xl mx-auto px-6 pt-10 pb-6">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 pb-8 border-b border-slate-800">
-          <div>
-            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">
-              Gerenciador de Agentes & Skills
-            </h1>
-            <p className="text-sm text-slate-400 mt-2 max-w-2xl leading-relaxed">
-              Cole o link de uma skill do GitHub abaixo para ativá-la instantaneamente na sua lista de agentes, ou crie novos agentes personalizados para o chat.
+        {/* TWO PRIMARY ACTIONS */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+          {/* ACTION 1: SUBIR ARQUIVO .MD */}
+          <div className="p-6 rounded-3xl border border-slate-800 bg-slate-900/60 shadow-xl space-y-4">
+            <div className="flex items-center gap-2 text-indigo-400 font-bold text-base">
+              <span>📤</span>
+              <h2>Subir meu Agente (`.md`)</h2>
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Carregue um arquivo <code className="text-slate-300">.md</code> do seu computador ou cole o texto do agente abaixo:
             </p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={() => setIsModalOpen(true)}
-              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-semibold text-xs text-white shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-2"
-            >
-              <span>+</span> Novo Agente
-            </button>
-            <a
-              href="#importer-section"
-              className="px-4 py-2.5 rounded-xl border border-slate-700 hover:border-slate-600 bg-slate-900 text-xs font-semibold text-slate-200 transition-colors flex items-center gap-2"
-            >
-              <span>🐙</span> Importar do GitHub
-            </a>
-          </div>
-        </div>
 
-        {/* HOW TO USE GUIDE */}
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-          <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/50 space-y-1.5">
-            <div className="font-bold text-indigo-400 flex items-center gap-1.5">
-              <span>1️⃣</span> Cole o Link do GitHub
-            </div>
-            <p className="text-slate-400">Cole a URL de qualquer skill abaixo e clique em Auditar para verificar a licença.</p>
-          </div>
-          <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/50 space-y-1.5">
-            <div className="font-bold text-emerald-400 flex items-center gap-1.5">
-              <span>2️⃣</span> Ative com 1 Clique
-            </div>
-            <p className="text-slate-400">Clique em &quot;Ativar nos Meus Agentes&quot; e a skill entra instantaneamente na sua lista.</p>
-          </div>
-          <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/50 space-y-1.5">
-            <div className="font-bold text-blue-400 flex items-center gap-1.5">
-              <span>3️⃣</span> Chame no Chat
-            </div>
-            <p className="text-slate-400">Em qualquer projeto, digite <code className="text-indigo-300">/nome-do-agente</code> para usá-lo!</p>
-          </div>
-        </div>
-      </header>
-
-      {/* MAIN */}
-      <main className="max-w-7xl mx-auto px-6 py-6 space-y-12">
-        {/* AGENTS SECTION */}
-        <section className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <span>🤖</span> Seus Agentes Disponíveis ({agents.length})
-              </h2>
-              <p className="text-xs text-slate-400 mt-1">
-                Invoque qualquer um desses agentes no chat digitando o comando correspondente:
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {agents.map((a) => (
-              <div
-                key={a.name}
-                className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60 hover:border-indigo-500/40 transition-all flex flex-col justify-between space-y-4"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between">
-                    <span className="px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-400 font-mono text-xs font-bold border border-indigo-500/20">
-                      {a.chatCommand}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        {a.badge || 'Global'}
-                      </span>
-                      <button
-                        onClick={() => handleDeleteAgent(a.name)}
-                        className="text-slate-500 hover:text-red-400 text-xs px-1"
-                        title="Remover"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  </div>
-                  <h3 className="font-bold text-base text-slate-100">{a.role}</h3>
-                  <p className="text-xs text-slate-400 leading-relaxed">{a.description}</p>
-                </div>
-                <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                  <span className="text-slate-500 font-mono text-[11px]">{a.tools}</span>
-                  <button
-                    onClick={() => copyToClipboard(a.chatCommand)}
-                    className="text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1"
-                  >
-                    {copiedText === a.chatCommand ? 'Copiado!' : 'Copiar Comando 📋'}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* GITHUB IMPORTER SECTION */}
-        <section
-          id="importer-section"
-          className="p-8 rounded-3xl border border-slate-800 bg-gradient-to-br from-slate-900/90 to-slate-950 shadow-xl space-y-6"
-        >
-          <div className="max-w-2xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 mb-3">
-              <span>🛡️</span> 0% Risco Jurídico
-            </div>
-            <h2 className="text-2xl font-bold">Importador Universal de Skills do GitHub</h2>
-            <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-              Cole a URL de qualquer repositório ou skill do GitHub. O sistema audita a licença e permite adicioná-la com 1 clique à sua lista de agentes.
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row gap-3">
-              <input
-                type="text"
-                value={githubUrl}
-                onChange={(e) => setGithubUrl(e.target.value)}
-                placeholder="Cole o link do GitHub (ex: https://github.com/expressjs/express ou owner/repo)"
-                className="flex-1 px-4 py-3.5 rounded-xl border border-slate-700 bg-slate-900/80 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-500"
-              />
-              <button
-                onClick={handleAuditLicense}
-                disabled={isAuditing}
-                className="px-6 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-semibold text-xs text-white shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
-              >
-                <span>🔍</span> {isAuditing ? 'Auditando Licença...' : 'Auditar & Ativar'}
-              </button>
-            </div>
-
-            {auditResult && (
-              <div
-                className={`p-5 rounded-2xl border text-xs space-y-3 ${
-                  auditResult.valid
-                    ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-300'
-                    : 'border-red-500/30 bg-red-950/20 text-red-300'
-                }`}
-              >
-                {auditResult.valid ? (
-                  <>
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                      <div>
-                        <div className="font-bold text-sm flex items-center gap-2 text-emerald-400">
-                          <span>✅</span> LICENÇA APROVADA: {auditResult.license} ({auditResult.spdxId})
-                        </div>
-                        <p className="text-slate-300 mt-1">
-                          Conformidade jurídica de 100% garantida (0% de risco legal).
-                        </p>
-                      </div>
-
-                      {/* BUTTON THAT DIRECTLY ADDS TO AGENTS */}
-                      <button
-                        onClick={handleAddImportedAgent}
-                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 transition-all flex items-center gap-2"
-                      >
-                        <span>⚡</span> Ativar nos Meus Agentes Agora
-                      </button>
-                    </div>
-
-                    <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-slate-300 flex items-center justify-between">
-                      <span>Comando no terminal: <code>ag-hub skill add {githubUrl} --global</code></span>
-                      <button
-                        onClick={() => copyToClipboard(`ag-hub skill add ${githubUrl} --global`)}
-                        className="text-xs text-indigo-400 hover:text-indigo-300 ml-2"
-                      >
-                        Copiar 📋
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="font-bold text-sm flex items-center gap-2 text-red-400">
-                      <span>🚫</span> INSTALAÇÃO BLOQUEADA (0% RISCO JURÍDICO)
-                    </div>
-                    <p className="text-slate-300">{auditResult.error || 'Licença não permitida ou inexistente.'}</p>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* MCP SECTION */}
-        <section className="space-y-6">
-          <div>
-            <h2 className="text-xl font-bold flex items-center gap-2">
-              <span>🔌</span> Conectores MCP & APIs REST
-            </h2>
-            <p className="text-xs text-slate-400 mt-1">Ligue ferramentas, bancos de dados e APIs diretamente ao Antigravity.</p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/40 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-2xl">🗄️</span>
-                <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400">Pronto</span>
-              </div>
-              <h3 className="font-bold text-sm">SQLite Local</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">Conecta bancos SQLite para consultas SQL pelo agente.</p>
-              <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-400">
-                ag-hub mcp preset sqlite
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/40 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-2xl">🌐</span>
-                <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400">Pronto</span>
-              </div>
-              <h3 className="font-bold text-sm">Fetch Web</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">Busca páginas da web e converte para Markdown limpo.</p>
-              <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-400">
-                ag-hub mcp preset fetch
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/40 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-2xl">🐙</span>
-                <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/10 text-emerald-400">Pronto</span>
-              </div>
-              <h3 className="font-bold text-sm">GitHub MCP</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">Operações com PRs, commits e automações de repositório.</p>
-              <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-400">
-                ag-hub mcp preset github
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/40 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-2xl">⚡</span>
-                <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-500/10 text-indigo-400">Custom</span>
-              </div>
-              <h3 className="font-bold text-sm">API REST Wrapper</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">Conecte qualquer API externa gerando scripts cURL auxiliares.</p>
-              <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-400">
-                ag-hub api-connect &lt;nome&gt;
-              </div>
-            </div>
-          </div>
-        </section>
-      </main>
-
-      {/* MODAL: NOVO AGENTE */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold">Criar Novo Agente para o Chat</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white text-lg">
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateAgent} className="space-y-4 text-xs">
+            <form onSubmit={handleSaveManual} className="space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-slate-300 mb-1">Identificador (Slash Command)</label>
-                <div className="flex items-center gap-2">
-                  <span className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-400 font-mono">/</span>
-                  <input
-                    type="text"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="ex: security-auditor"
-                    className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 font-mono"
-                    required
-                  />
-                </div>
+                <label className="block text-slate-400 mb-1 font-medium">Carregar arquivo do computador:</label>
+                <input
+                  type="file"
+                  accept=".md,.markdown"
+                  onChange={handleFileUpload}
+                  className="w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
+                />
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-300 mb-1">Papel / Título</label>
+                <label className="block text-slate-400 mb-1 font-medium">Nome do Agente (sem espaços):</label>
                 <input
                   type="text"
-                  value={newRole}
-                  onChange={(e) => setNewRole(e.target.value)}
-                  placeholder="ex: Senior Security Auditor"
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100"
+                  value={uploadName}
+                  onChange={(e) => setUploadName(e.target.value)}
+                  placeholder="ex: revisor-de-codigo"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   required
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-300 mb-1">Descrição</label>
-                <input
-                  type="text"
-                  value={newDesc}
-                  onChange={(e) => setNewDesc(e.target.value)}
-                  placeholder="ex: Especialista em análise de vulnerabilidades OWASP"
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-300 mb-1">Prompt de Sistema / Diretrizes</label>
+                <label className="block text-slate-400 mb-1 font-medium">Conteúdo Markdown do Agente:</label>
                 <textarea
-                  value={newPrompt}
-                  onChange={(e) => setNewPrompt(e.target.value)}
-                  rows={3}
-                  placeholder="Diretrizes do agente..."
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100"
+                  value={uploadContent}
+                  onChange={(e) => setUploadContent(e.target.value)}
+                  rows={4}
+                  placeholder="# Revisor de Código&#10;&#10;Você é um revisor de código experiente...&#10;&#10;## Diretrizes&#10;- Examine segurança&#10;- Verifique arquitetura"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  required
                 ></textarea>
               </div>
 
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-700 text-xs font-semibold text-slate-300 hover:bg-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-semibold text-xs text-white"
-                >
-                  Criar & Ativar no Chat
-                </button>
-              </div>
+              <button
+                type="submit"
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-semibold text-xs text-white shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2"
+              >
+                <span>💾</span> Salvar Agente (`.md`)
+              </button>
             </form>
+          </div>
+
+          {/* ACTION 2: SALVAR DE REPOSITÓRIO GITHUB */}
+          <div className="p-6 rounded-3xl border border-slate-800 bg-slate-900/60 shadow-xl space-y-4">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold text-base">
+              <span>🐙</span>
+              <h2>Salvar de Repositório do GitHub</h2>
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Cole a URL de qualquer repositório no GitHub. O sistema audita a licença e baixa o <code className="text-slate-300">.md</code> do agente automaticamente:
+            </p>
+
+            <form onSubmit={handleImportGithub} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-400 mb-1 font-medium">Link do repositório no GitHub:</label>
+                <input
+                  type="text"
+                  value={githubUrl}
+                  onChange={(e) => setGithubUrl(e.target.value)}
+                  placeholder="https://github.com/usuario/meu-agente"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  required
+                />
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
+                <div className="font-semibold text-slate-300">Como funciona a auditoria:</div>
+                <div>• Verifica licença via API oficial (apenas MIT e Apache-2.0).</div>
+                <div>• Localiza arquivos <code className="text-indigo-300">SKILL.md</code>, <code className="text-indigo-300">agent.md</code> ou <code className="text-indigo-300">README.md</code>.</div>
+                <div>• Salva como novo agente na sua pasta <code className="text-emerald-400">agents/</code>.</div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isImporting}
+                className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-xs text-white shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <span>📥</span> {isImporting ? 'Auditando e Baixando...' : 'Baixar e Salvar como Agente'}
+              </button>
+            </form>
+
+            {githubStatus && (
+              <div
+                className={`p-3 rounded-xl border text-xs ${
+                  githubStatus.type === 'success'
+                    ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-300'
+                    : 'border-red-500/30 bg-red-950/20 text-red-300'
+                }`}
+              >
+                {githubStatus.message}
+              </div>
+            )}
+          </div>
+
+        </div>
+
+        {/* AGENTS LIST */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <span>📚</span> Agentes Salvos ({agents.length})
+            </h2>
+            <span className="text-xs text-slate-400">Pasta: <code>agents/&lt;nome&gt;.md</code></span>
+          </div>
+
+          {loading ? (
+            <div className="p-8 text-center text-xs text-slate-500">Carregando agentes...</div>
+          ) : agents.length === 0 ? (
+            <div className="p-12 rounded-3xl border border-dashed border-slate-800 text-center space-y-2">
+              <div className="text-2xl">📭</div>
+              <h3 className="text-sm font-bold text-slate-300">Nenhum agente salvo ainda</h3>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                Suba seu primeiro arquivo <code className="text-slate-400">.md</code> ou cole uma URL do GitHub acima para salvar seu primeiro agente!
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {agents.map((agent) => (
+                <div
+                  key={agent.name}
+                  className="p-5 rounded-2xl border border-slate-800 bg-slate-900/50 hover:border-indigo-500/40 transition-all flex flex-col justify-between space-y-4 shadow-sm"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                        {agent.fileName}
+                      </span>
+                      <button
+                        onClick={() => handleDelete(agent.name)}
+                        className="text-slate-500 hover:text-red-400 text-xs px-1"
+                        title="Excluir agente"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <h3 className="font-bold text-sm text-slate-100">{agent.title}</h3>
+                    <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed font-mono bg-slate-950 p-2 rounded-lg border border-slate-900">
+                      {agent.content.slice(0, 150)}...
+                    </p>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2 text-xs">
+                    <button
+                      onClick={() => setPreviewAgent(agent)}
+                      className="text-indigo-400 hover:text-indigo-300 font-medium"
+                    >
+                      Ver `.md` 👁️
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => downloadMd(agent)}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300"
+                        title="Baixar arquivo markdown"
+                      >
+                        Baixar 💾
+                      </button>
+                      <button
+                        onClick={() => copyToClipboard(agent.content)}
+                        className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] text-white font-medium shadow-sm"
+                        title="Copiar prompt completo para o chat"
+                      >
+                        Copiar 📋
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+      </div>
+
+      {/* MODAL PREVIEW MARKDOWN */}
+      {previewAgent && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 space-y-4 shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div>
+                <h3 className="font-bold text-sm">{previewAgent.fileName}</h3>
+                <span className="text-xs text-slate-400">{previewAgent.title}</span>
+              </div>
+              <button
+                onClick={() => setPreviewAgent(null)}
+                className="text-slate-400 hover:text-white text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
+              {previewAgent.content}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => downloadMd(previewAgent)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200"
+              >
+                Baixar `.md`
+              </button>
+              <button
+                onClick={() => {
+                  copyToClipboard(previewAgent.content);
+                  setPreviewAgent(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white"
+              >
+                Copiar Prompt Completo 📋
+              </button>
+            </div>
           </div>
         </div>
       )}
