@@ -18,6 +18,8 @@
     "src/importers/**/*",
     "src/license/**/*",
     "src/mcp/**/*",
+    "src/mcp-server/**/*",
+    "src/lib/**/*",
     "src/types/**/*",
     "src/utils/**/*"
   ],

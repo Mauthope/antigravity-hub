@@ -346,30 +346,118 @@ mcpCmd
     }
   });
 
-// ==========================================
-// API CONNECTOR COMMAND
-// ==========================================
-program
-  .command('api-connect <name>')
-  .description('Conecta uma API REST ao Antigravity, gerando conector MCP e skill com script cURL auxiliar')
-  .requiredOption('-u, --url <url>', 'Base URL da API')
-  .option('-h, --header <header>', 'Header de autorização (ex: Authorization ou X-Api-Key)')
-  .option('-t, --token <token>', 'Token de autenticação')
-  .option('-g, --global', 'Configura no escopo global')
-  .action((name: string, opts: { url: string; header?: string; token?: string; global?: boolean }) => {
+// Attach serve and install directly to the existing mcpCmd
+mcpCmd
+  .command('serve')
+  .description('Inicia o Servidor MCP Oficial do Antigravity Hub via stdio')
+  .action(async () => {
     try {
-      const target = opts.global ? 'global' : 'local';
-      McpManager.addApiConnector(
-        name,
-        {
-          baseUrl: opts.url,
-          authHeader: opts.header,
-          token: opts.token,
-        },
-        { target }
-      );
+      const { createHubMcpServer } = await import('../mcp-server/server.js');
+      const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
+
+      const server = createHubMcpServer();
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
     } catch (err) {
-      console.error(`\n❌ Erro ao conectar API: ${err instanceof Error ? err.message : String(err)}\n`);
+      console.error('Fatal MCP Server error:', err);
+      process.exit(1);
+    }
+  });
+
+mcpCmd
+  .command('install')
+  .description('Registra automaticamente o Servidor MCP do Hub no Antigravity (.agents/mcp.json)')
+  .option('-g, --global', 'Instala também na configuração global do Antigravity (~/.gemini/config/mcp.json)')
+  .action((opts: { global?: boolean }) => {
+    try {
+      const paths = resolveHubPaths();
+      const currentDir = process.cwd();
+      const serverScriptPath = path.resolve(currentDir, 'dist/mcp-server/index.js');
+
+      const serverDef = {
+        command: 'node',
+        args: [serverScriptPath],
+        env: process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : undefined,
+        type: 'stdio' as const,
+        description: 'Servidor MCP Oficial do Antigravity Hub (list_agents, get_agent, save_agent, import_agent_github)',
+      };
+
+      // 1. Instala no projeto local (.agents/mcp.json)
+      McpManager.addServer('antigravity-hub', serverDef, { target: 'local' });
+
+      // 2. Opcionalmente instala no global (~/.gemini/config/mcp.json)
+      if (opts.global) {
+        McpManager.addServer('antigravity-hub', serverDef, { target: 'global' });
+      }
+
+      console.log('\n✅ [Antigravity Hub] Servidor MCP registrado com sucesso!');
+      console.log(`   - Arquivo Local: ${paths.localMcpFile}`);
+      if (opts.global) {
+        console.log(`   - Arquivo Global: ${paths.globalMcpFile}`);
+      }
+      console.log('\nFerramentas disponíveis agora para a IA no Chat:');
+      console.log('   • list_agents: lista todos os seus agentes');
+      console.log('   • get_agent: obtém as instruções completas (.md) de qualquer agente');
+      console.log('   • save_agent: salva um novo agente diretamente no Neon PostgreSQL');
+      console.log('   • import_agent_github: importa agentes do GitHub com auditoria de licença (MIT/Apache-2.0)\n');
+    } catch (err) {
+      console.error(`\n❌ Erro ao instalar Servidor MCP: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  });
+
+// Top-level aliases
+program
+  .command('mcp-serve')
+  .description('Inicia o Servidor MCP Oficial via stdio (atalho para "ag-hub mcp serve")')
+  .action(async () => {
+    try {
+      const { createHubMcpServer } = await import('../mcp-server/server.js');
+      const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
+
+      const server = createHubMcpServer();
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+    } catch (err) {
+      console.error('Fatal MCP Server error:', err);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('mcp-install')
+  .description('Registra o Servidor MCP no Antigravity (atalho para "ag-hub mcp install")')
+  .option('-g, --global', 'Instala também na configuração global do Antigravity (~/.gemini/config/mcp.json)')
+  .action((opts: { global?: boolean }) => {
+    try {
+      const paths = resolveHubPaths();
+      const currentDir = process.cwd();
+      const serverScriptPath = path.resolve(currentDir, 'dist/mcp-server/index.js');
+
+      const serverDef = {
+        command: 'node',
+        args: [serverScriptPath],
+        env: process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : undefined,
+        type: 'stdio' as const,
+        description: 'Servidor MCP Oficial do Antigravity Hub (list_agents, get_agent, save_agent, import_agent_github)',
+      };
+
+      McpManager.addServer('antigravity-hub', serverDef, { target: 'local' });
+      if (opts.global) {
+        McpManager.addServer('antigravity-hub', serverDef, { target: 'global' });
+      }
+
+      console.log('\n✅ [Antigravity Hub] Servidor MCP registrado com sucesso!');
+      console.log(`   - Arquivo Local: ${paths.localMcpFile}`);
+      if (opts.global) {
+        console.log(`   - Arquivo Global: ${paths.globalMcpFile}`);
+      }
+      console.log('\nFerramentas disponíveis para a IA no Chat:');
+      console.log('   • list_agents: lista todos os seus agentes');
+      console.log('   • get_agent: obtém as instruções completas (.md) de qualquer agente');
+      console.log('   • save_agent: salva um novo agente diretamente no Neon PostgreSQL');
+      console.log('   • import_agent_github: importa agentes do GitHub com auditoria de licença (MIT/Apache-2.0)\n');
+    } catch (err) {
+      console.error(`\n❌ Erro ao instalar Servidor MCP: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   });
 

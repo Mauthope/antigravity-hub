@@ -26,6 +26,7 @@ import {
   HelpCircle,
   RefreshCw,
   CheckCircle2,
+  Cpu,
 } from 'lucide-react';
 import { GlassCapsuleButton } from '@/components/ui/glass-capsule-button';
 import { SquircleKpiCard } from '@/components/ui/squircle-kpi-card';
@@ -65,6 +66,7 @@ export default function HomePage() {
   const [previewAgent, setPreviewAgent] = useState<AgentMd | null>(null);
   const [showNeonModal, setShowNeonModal] = useState(false);
   const [showAntigravityGuide, setShowAntigravityGuide] = useState(false);
+  const [showMcpModal, setShowMcpModal] = useState(false);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [dbDetails, setDbDetails] = useState<{
     connected: boolean;
@@ -379,13 +381,13 @@ export default function HomePage() {
               </button>
             )}
 
-            {/* Antigravity Guide Button */}
+            {/* MCP Server Button */}
             <button
-              onClick={() => setShowAntigravityGuide(true)}
+              onClick={() => setShowMcpModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/25 hover:bg-indigo-500/20 transition-colors cursor-pointer"
             >
-              <Terminal className="w-3.5 h-3.5" strokeWidth={2} />
-              Como Chamar no Chat
+              <Cpu className="w-3.5 h-3.5" strokeWidth={2} />
+              Conectar via MCP
             </button>
 
             {/* License Shield Badge */}
@@ -419,10 +421,10 @@ export default function HomePage() {
         {/* HERO SECTION */}
         <section className="space-y-3">
           <h1 className="font-heading font-black text-3xl sm:text-4xl lg:text-5xl tracking-tight text-slate-900 dark:text-white">
-            Orquestrador de Agentes Markdown
+            Orquestrador de Agentes Markdown & Servidor MCP
           </h1>
           <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 max-w-3xl leading-relaxed">
-            Centralize e acione seus agentes em qualquer conversa do Antigravity. Cada agente possui uma especialidade clara, comandos de chat imediatos e armazenamento persistente na nuvem.
+            Centralize seus agentes em Markdown e acione-os nativamente dentro do Antigravity como ferramentas do protocolo MCP. Seus agentes salvos na nuvem ficam instantaneamente acessíveis na conversa.
           </p>
         </section>
 
@@ -433,7 +435,7 @@ export default function HomePage() {
             title="Agentes Prontos"
             value={agents.length}
             unit="ativos"
-            subtitle="Prontos para uso no chat"
+            subtitle="Disponíveis no Hub"
             icon={Bot}
             color="blue"
           />
@@ -457,11 +459,11 @@ export default function HomePage() {
           />
           <SquircleKpiCard
             badgeNumber={4}
-            title="Invocação Chat"
-            value="Imediata"
-            unit=""
-            subtitle="Via /nome-do-agente"
-            icon={Terminal}
+            title="Servidor MCP"
+            value="Ativo"
+            unit="JSON-RPC"
+            subtitle="list_agents & get_agent"
+            icon={Cpu}
             color="amber"
           />
         </section>
@@ -1036,6 +1038,152 @@ export default function HomePage() {
                 onClick={() => setShowAntigravityGuide(false)}
               >
                 Pronto para Usar
+              </GlassCapsuleButton>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MCP SERVER CONNECTION MODAL */}
+      {showMcpModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="glow-card max-w-2xl w-full p-6 sm:p-8 space-y-6 shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 flex items-center justify-center">
+                  <Cpu className="w-5 h-5" strokeWidth={2} />
+                </div>
+                <div>
+                  <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
+                    Conectar ao Antigravity via MCP
+                  </h3>
+                  <span className="text-xs text-slate-500">Padrão Model Context Protocol oficial</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowMcpModal(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" strokeWidth={2} />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs text-slate-700 dark:text-slate-300">
+              <p className="leading-relaxed">
+                Ao instalar o Hub como servidor MCP, a IA do Antigravity ganha <strong>ferramentas nativas</strong> no chat para listar seus agentes, puxar instruções <code className="font-mono text-cyan-600 dark:text-cyan-400 font-bold">.md</code>, salvar agentes no Neon e importar do GitHub com auditoria de licença.
+              </p>
+
+              {/* SECTION: CONFIG SNIPPET */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-heading font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-cyan-500" strokeWidth={2} />
+                    Configuração em .agents/mcp.json (ou Claude Desktop / Cursor):
+                  </span>
+                  <button
+                    onClick={() => {
+                      const snippet = JSON.stringify({
+                        mcpServers: {
+                          "antigravity-hub": {
+                            command: "node",
+                            args: ["/home/antigravity/antigravity-hub/dist/mcp-server/index.js"],
+                            env: {
+                              DATABASE_URL: "sua-connection-string-do-neon"
+                            }
+                          }
+                        }
+                      }, null, 2);
+                      copyToClipboard(snippet, 'mcp-json');
+                    }}
+                    className="text-[11px] font-heading font-bold text-cyan-600 dark:text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" strokeWidth={2} />
+                    {copiedId === 'mcp-json' ? 'Copiado!' : 'Copiar JSON'}
+                  </button>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-slate-900 text-slate-200 font-mono text-[11px] leading-relaxed overflow-x-auto border border-slate-800">
+                  <pre>{`{
+  "mcpServers": {
+    "antigravity-hub": {
+      "command": "node",
+      "args": ["/home/antigravity/antigravity-hub/dist/mcp-server/index.js"],
+      "env": {
+        "DATABASE_URL": "sua-connection-string-do-neon"
+      }
+    }
+  }
+}`}</pre>
+                </div>
+              </div>
+
+              {/* SECTION: 1-COMMAND INSTALL */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-heading font-bold text-slate-900 dark:text-white">
+                    Instalação em 1 Comando no Terminal:
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard('node dist/cli/index.js mcp install --global', 'cli-cmd')}
+                    className="text-[11px] font-heading font-bold text-cyan-600 dark:text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" strokeWidth={2} />
+                    {copiedId === 'cli-cmd' ? 'Copiado!' : 'Copiar Comando'}
+                  </button>
+                </div>
+                <div className="p-2.5 rounded-xl bg-slate-900 text-cyan-300 font-mono text-[11px]">
+                  node dist/cli/index.js mcp install --global
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Grava automaticamente em <code className="font-mono">.agents/mcp.json</code> e em <code className="font-mono">~/.gemini/config/mcp.json</code>.
+                </p>
+              </div>
+
+              {/* SECTION: AVAILABLE MCP TOOLS */}
+              <div className="space-y-2">
+                <span className="font-heading font-bold text-slate-900 dark:text-white block">
+                  Ferramentas que o Antigravity passa a executar:
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">list_agents</span>
+                    <span className="text-slate-500">Lista todos os agentes salvos no Hub com resumo.</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">get_agent</span>
+                    <span className="text-slate-500">Obtém as instruções .md completas do agente.</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">save_agent</span>
+                    <span className="text-slate-500">Salva novos agentes no Neon DB direto pelo chat.</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">import_agent_github</span>
+                    <span className="text-slate-500">Audita (só MIT/Apache-2.0) e importa do GitHub.</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION: HTTP ENDPOINT */}
+              <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-900 dark:text-indigo-200 space-y-1">
+                <span className="font-heading font-bold block">
+                  Conexão Remota na Nuvem (Vercel):
+                </span>
+                <p className="text-[11px] opacity-90">
+                  Você também pode apontar qualquer cliente MCP para o endpoint HTTP da Vercel:
+                </p>
+                <code className="block p-2 rounded-lg bg-slate-900 text-indigo-300 font-mono text-[11px] break-all">
+                  https://[seu-projeto].vercel.app/api/mcp
+                </code>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <GlassCapsuleButton
+                variant="cyan"
+                size="md"
+                onClick={() => setShowMcpModal(false)}
+              >
+                Concluir
               </GlassCapsuleButton>
             </div>
           </div>
