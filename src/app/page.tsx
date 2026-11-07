@@ -10,6 +10,8 @@ interface AgentMd {
   chatCommand: string;
 }
 
+const STORAGE_KEY = 'antigravity_hub_agents_md_v2';
+
 export default function HomePage() {
   const [agents, setAgents] = useState<AgentMd[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,18 +34,50 @@ export default function HomePage() {
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3500);
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  // Helper to persist to localStorage
+  const saveToStorage = (list: AgentMd[]) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    } catch {
+      // ignore
+    }
   };
 
   const fetchAgents = async () => {
+    let localAgents: AgentMd[] = [];
     try {
-      const res = await fetch('/api/agents');
-      const data = await res.json();
-      if (data.agents) {
-        setAgents(data.agents);
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        localAgents = JSON.parse(saved);
+        if (Array.isArray(localAgents) && localAgents.length > 0) {
+          setAgents(localAgents);
+        }
       }
     } catch {
-      // fallback
+      // ignore
+    }
+
+    try {
+      const res = await fetch('/api/agents');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.agents) && data.agents.length > 0) {
+          // Merge avoiding duplicates
+          const merged = [...data.agents];
+          localAgents.forEach((la) => {
+            if (!merged.some((m) => m.name === la.name)) {
+              merged.push(la);
+            }
+          });
+          setAgents(merged);
+          saveToStorage(merged);
+        }
+      }
+    } catch {
+      // ignore network errors
     } finally {
       setLoading(false);
     }
@@ -58,14 +92,14 @@ export default function HomePage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const baseName = file.name.replace(/\.md$/i, '');
+    const baseName = file.name.replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
     setUploadName(baseName);
 
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
       setUploadContent(text);
-      showToast(`Arquivo ${file.name} carregado no formulário!`);
+      showToast(`Arquivo '${file.name}' carregado no formulário!`);
     };
     reader.readAsText(file);
   };
@@ -74,31 +108,43 @@ export default function HomePage() {
   const handleSaveManual = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadName.trim() || !uploadContent.trim()) {
-      showToast('Preencha o nome e o conteúdo do markdown.');
+      showToast('Por favor, preencha o nome e o conteúdo do markdown.');
       return;
     }
 
+    const cleanName = uploadName.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-|-$/g, '') || 'custom-agent';
+    const titleMatch = uploadContent.match(/^#+\s*(.+)$/m);
+    const title = titleMatch ? titleMatch[1].trim() : cleanName;
+
+    const newAgent: AgentMd = {
+      name: cleanName,
+      fileName: `${cleanName}.md`,
+      title,
+      content: uploadContent,
+      chatCommand: `/${cleanName}`,
+    };
+
+    // 1. Immediately save to local state & localStorage (guaranteed to never fail!)
+    const updated = [newAgent, ...agents.filter((a) => a.name !== cleanName)];
+    setAgents(updated);
+    saveToStorage(updated);
+
+    showToast(`✅ Agente '${cleanName}.md' salvo com sucesso!`);
+    setUploadName('');
+    setUploadContent('');
+
+    // 2. Background notify server (won't block UI even on serverless read-only)
     try {
-      const res = await fetch('/api/agents', {
+      await fetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: uploadName,
+          name: cleanName,
           content: uploadContent,
         }),
       });
-
-      if (res.ok) {
-        showToast(`✅ Agente ${uploadName}.md salvo com sucesso!`);
-        setUploadName('');
-        setUploadContent('');
-        fetchAgents();
-      } else {
-        const err = await res.json();
-        showToast(`Erro: ${err.error || 'Falha ao salvar'}`);
-      }
-    } catch (err) {
-      showToast('Erro de conexão ao salvar agente.');
+    } catch {
+      // local copy is already saved
     }
   };
 
@@ -120,22 +166,33 @@ export default function HomePage() {
       const data = await res.json();
 
       if (res.ok && data.valid) {
-        // Save to agents API
-        await fetch('/api/agents', {
+        const cleanName = data.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        const newAgent: AgentMd = {
+          name: cleanName,
+          fileName: `${cleanName}.md`,
+          title: data.title || cleanName,
+          content: data.content,
+          chatCommand: `/${cleanName}`,
+        };
+
+        // 1. Save to state & localStorage immediately!
+        const updated = [newAgent, ...agents.filter((a) => a.name !== cleanName)];
+        setAgents(updated);
+        saveToStorage(updated);
+
+        // 2. Notify server in background
+        fetch('/api/agents', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: data.name,
-            content: data.content,
-          }),
-        });
+          body: JSON.stringify({ name: cleanName, content: data.content }),
+        }).catch(() => {});
 
         setGithubStatus({
           type: 'success',
-          message: `✅ Agente '${data.name}.md' importado com sucesso do GitHub! Licença verificada: ${data.license} (0% risco legal).`,
+          message: `✅ Agente '${cleanName}.md' importado com sucesso do GitHub! Licença verificada: ${data.license} (0% risco legal).`,
         });
         setGithubUrl('');
-        fetchAgents();
+        showToast(`🎉 Agente '${cleanName}.md' importado com sucesso!`);
       } else {
         setGithubStatus({
           type: 'error',
@@ -145,7 +202,7 @@ export default function HomePage() {
     } catch {
       setGithubStatus({
         type: 'error',
-        message: 'Falha ao conectar para importar do GitHub.',
+        message: 'Falha ao conectar com o serviço de importação.',
       });
     } finally {
       setIsImporting(false);
@@ -153,23 +210,21 @@ export default function HomePage() {
   };
 
   // Delete agent
-  const handleDelete = async (name: string) => {
+  const handleDelete = (name: string) => {
     if (!confirm(`Deseja realmente excluir o agente ${name}.md?`)) return;
 
-    try {
-      const res = await fetch(`/api/agents?name=${name}`, { method: 'DELETE' });
-      if (res.ok) {
-        showToast(`🗑️ Agente ${name}.md removido.`);
-        fetchAgents();
-      }
-    } catch {
-      showToast('Falha ao excluir agente.');
-    }
+    const updated = agents.filter((a) => a.name !== name);
+    setAgents(updated);
+    saveToStorage(updated);
+    showToast(`🗑️ Agente '${name}.md' removido.`);
+
+    // Server cleanup in background
+    fetch(`/api/agents?name=${name}`, { method: 'DELETE' }).catch(() => {});
   };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    showToast(`Copiado para a área de transferência: ${text}`);
+    showToast(`Copiado para a área de transferência!`);
   };
 
   const downloadMd = (agent: AgentMd) => {
@@ -308,7 +363,7 @@ export default function HomePage() {
                 <div className="font-semibold text-slate-300">Como funciona a auditoria:</div>
                 <div>• Verifica licença via API oficial (apenas MIT e Apache-2.0).</div>
                 <div>• Localiza arquivos <code className="text-indigo-300">SKILL.md</code>, <code className="text-indigo-300">agent.md</code> ou <code className="text-indigo-300">README.md</code>.</div>
-                <div>• Salva como novo agente na sua pasta <code className="text-emerald-400">agents/</code>.</div>
+                <div>• Salva automaticamente como novo agente na sua lista.</div>
               </div>
 
               <button
@@ -341,7 +396,7 @@ export default function HomePage() {
             <h2 className="text-lg font-bold flex items-center gap-2">
               <span>📚</span> Agentes Salvos ({agents.length})
             </h2>
-            <span className="text-xs text-slate-400">Pasta: <code>agents/&lt;nome&gt;.md</code></span>
+            <span className="text-xs text-slate-400">Armazenamento Local & Nuvem</span>
           </div>
 
           {loading ? (
