@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Antigravity Hub - Cloud Web Dashboard',
-  description: 'Gerenciador universal de agentes, skills e MCP para o Google Antigravity com verificação estrita de licenças MIT e Apache-2.0',
+  title: 'Antigravity Hub | Maestro de Agentes & Skills',
+  description: 'Arquitetura Neo-Tactile Porcelain & Obsidian Liquid Glass para orquestração de Agentes Markdown e integração Neon Database.',
 };
 
 export default function RootLayout({
@@ -13,7 +13,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR" className="dark">
-      <body className="min-h-screen bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body className="antialiased selection:bg-cyan-500 selection:text-white">
         {children}
       </body>
     </html>
