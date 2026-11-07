@@ -42,7 +42,7 @@ interface AgentMd {
   database?: string;
 }
 
-const STORAGE_KEY = 'antigravity_hub_agents_v3';
+const STORAGE_KEY = 'antigravity_hub_agents_v4';
 
 export default function HomePage() {
   const [agents, setAgents] = useState<AgentMd[]>([]);
@@ -131,37 +131,25 @@ export default function HomePage() {
   };
 
   const fetchAgents = async () => {
-    let localAgents: AgentMd[] = [];
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        localAgents = JSON.parse(saved);
-        if (Array.isArray(localAgents) && localAgents.length > 0) {
-          setAgents(localAgents);
-        }
-      }
-    } catch {
-      // ignore
-    }
-
     try {
       const res = await fetch('/api/agents');
       if (res.ok) {
         const data = await res.json();
         setDbConnected(!!data.databaseConnected);
-        if (Array.isArray(data.agents) && data.agents.length > 0) {
-          const merged = [...data.agents];
-          localAgents.forEach((la) => {
-            if (!merged.some((m) => m.name === la.name)) {
-              merged.push(la);
-            }
-          });
-          setAgents(merged);
-          saveToStorage(merged);
-        }
+        const list = Array.isArray(data.agents) ? data.agents : [];
+        setAgents(list);
+        saveToStorage(list);
       }
     } catch {
-      // ignore network errors
+      // offline fallback
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          setAgents(JSON.parse(saved));
+        }
+      } catch {
+        // ignore
+      }
     } finally {
       setLoading(false);
     }
@@ -632,9 +620,32 @@ export default function HomePage() {
                 Cada agente possui descrição simplificada de atuação e orientação de quando acioná-lo.
               </p>
             </div>
-            <span className="text-xs font-mono text-slate-400">
-              Invocação: digite <span className="text-cyan-600 dark:text-cyan-400 font-bold">/nome</span> no chat
-            </span>
+            <div className="flex items-center gap-3">
+              {agents.length > 0 && (
+                <button
+                  onClick={async () => {
+                    if (confirm('Deseja excluir todos os agentes cadastrados e deixar o catálogo limpo?')) {
+                      setAgents([]);
+                      saveToStorage([]);
+                      showToast('Todos os agentes foram removidos.');
+                      try {
+                        await fetch('/api/agents?all=true', { method: 'DELETE' });
+                      } catch {
+                        // ignore
+                      }
+                    }
+                  }}
+                  className="text-xs font-heading font-bold text-red-500 hover:text-red-600 flex items-center gap-1 p-1 cursor-pointer transition-colors"
+                  title="Excluir todos os agentes"
+                >
+                  <Trash2 className="w-3.5 h-3.5" strokeWidth={2} />
+                  Limpar Catálogo
+                </button>
+              )}
+              <span className="text-xs font-mono text-slate-400">
+                Invocação: digite <span className="text-cyan-600 dark:text-cyan-400 font-bold">/nome</span> no chat
+              </span>
+            </div>
           </div>
 
           {loading ? (
@@ -642,14 +653,18 @@ export default function HomePage() {
               Carregando catálogo de agentes...
             </div>
           ) : agents.length === 0 ? (
-            <div className="glow-card p-12 text-center space-y-3">
-              <Bot className="w-10 h-10 text-slate-400 mx-auto opacity-50" strokeWidth={1.5} />
-              <h3 className="font-heading font-bold text-base text-slate-800 dark:text-slate-200">
-                Nenhum agente catalogado no momento
-              </h3>
-              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                Suba seu primeiro arquivo <code className="font-mono text-cyan-600 dark:text-cyan-400">.md</code> ou informe uma URL do GitHub acima para registrar seu primeiro especialista.
-              </p>
+            <div className="glow-card p-12 text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-600 dark:text-cyan-400 flex items-center justify-center mx-auto">
+                <Bot className="w-7 h-7" strokeWidth={1.75} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
+                  Catálogo Limpo e Pronto
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
+                  Nenhum agente cadastrado. Suba seus próprios arquivos <code className="font-mono text-cyan-600 dark:text-cyan-400 font-bold">.md</code> ou informe URLs do GitHub acima para adicionar seus agentes personalizados.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { getDb, initDb } from '@/lib/db';
-import { DEFAULT_AGENTS } from '@/lib/default-agents';
 
 function getAgentsDir(): string {
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
@@ -82,55 +81,32 @@ export async function GET() {
   if (sql) {
     try {
       await initDb();
-      let rows = await sql`
+      const rows = await sql`
         SELECT name, title, content, file_name, source_url, license, created_at, updated_at
         FROM agents
-        ORDER BY id ASC;
+        ORDER BY id DESC;
       `;
 
-      // Se o banco Neon foi criado agora e estiver vazio, auto-popula com os agentes padrão!
-      if (!rows || rows.length === 0) {
-        for (const def of DEFAULT_AGENTS) {
-          const details = parseAgentDetails(def.content, def.name);
-          try {
-            await sql`
-              INSERT INTO agents (name, title, content, file_name, source_url, license, updated_at)
-              VALUES (${def.name}, ${details.title}, ${def.content}, ${def.fileName}, 'builtin', 'MIT', CURRENT_TIMESTAMP)
-              ON CONFLICT (name) DO NOTHING;
-            `;
-          } catch {
-            // ignore
-          }
-        }
-        rows = await sql`
-          SELECT name, title, content, file_name, source_url, license, created_at, updated_at
-          FROM agents
-          ORDER BY id ASC;
-        `;
-      }
+      const agents = (rows || []).map((r) => {
+        const details = parseAgentDetails(r.content, r.name);
+        return {
+          name: r.name,
+          fileName: r.file_name,
+          title: r.title || details.title,
+          whatItDoes: details.whatItDoes,
+          whenToUse: details.whenToUse,
+          tags: details.tags,
+          content: r.content,
+          chatCommand: `/${r.name}`,
+          sourceUrl: r.source_url,
+          license: r.license,
+          database: 'Neon PostgreSQL',
+        };
+      });
 
-      if (rows && rows.length > 0) {
-        const agents = rows.map((r) => {
-          const details = parseAgentDetails(r.content, r.name);
-          return {
-            name: r.name,
-            fileName: r.file_name,
-            title: r.title || details.title,
-            whatItDoes: details.whatItDoes,
-            whenToUse: details.whenToUse,
-            tags: details.tags,
-            content: r.content,
-            chatCommand: `/${r.name}`,
-            sourceUrl: r.source_url,
-            license: r.license,
-            database: 'Neon PostgreSQL',
-          };
-        });
-
-        return NextResponse.json({ agents, databaseConnected: true });
-      }
+      return NextResponse.json({ agents, databaseConnected: true });
     } catch (dbErr) {
-      console.warn('Aviso: Erro ao consultar Neon DB, usando arquivos locais ou padrão:', dbErr);
+      console.warn('Aviso: Erro ao consultar Neon DB:', dbErr);
     }
   }
 
@@ -165,41 +141,9 @@ export async function GET() {
       }).filter(Boolean);
     }
 
-    // Se não encontrou arquivos no disco local (ex: ambiente serverless), usa os DEFAULT_AGENTS embutidos
-    if (agents.length === 0) {
-      agents = DEFAULT_AGENTS.map((def) => {
-        const details = parseAgentDetails(def.content, def.name);
-        return {
-          name: def.name,
-          fileName: def.fileName,
-          title: details.title,
-          whatItDoes: details.whatItDoes,
-          whenToUse: details.whenToUse,
-          tags: details.tags,
-          content: def.content,
-          chatCommand: `/${def.name}`,
-          database: 'Built-in Fallback',
-        };
-      });
-    }
-
     return NextResponse.json({ agents, databaseConnected: !!sql });
   } catch {
-    const fallbackAgents = DEFAULT_AGENTS.map((def) => {
-      const details = parseAgentDetails(def.content, def.name);
-      return {
-        name: def.name,
-        fileName: def.fileName,
-        title: details.title,
-        whatItDoes: details.whatItDoes,
-        whenToUse: details.whenToUse,
-        tags: details.tags,
-        content: def.content,
-        chatCommand: `/${def.name}`,
-        database: 'Built-in Fallback',
-      };
-    });
-    return NextResponse.json({ agents: fallbackAgents, databaseConnected: !!sql });
+    return NextResponse.json({ agents: [], databaseConnected: !!sql });
   }
 }
 
@@ -276,13 +220,40 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
+    const deleteAll = searchParams.get('all') === 'true';
     const name = searchParams.get('name');
+
+    const sql = getDb();
+
+    if (deleteAll) {
+      if (sql) {
+        try {
+          await initDb();
+          await sql`DELETE FROM agents;`;
+        } catch (err) {
+          console.warn('Erro ao limpar tabela do Neon:', err);
+        }
+      }
+
+      try {
+        const dir = ensureAgentsDir();
+        if (fs.existsSync(dir)) {
+          const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+          for (const f of files) {
+            fs.unlinkSync(path.join(/*turbopackIgnore: true*/ dir, f));
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      return NextResponse.json({ success: true, message: 'Todos os agentes foram excluídos com sucesso' });
+    }
 
     if (!name) {
       return NextResponse.json({ error: 'Nome é obrigatório' }, { status: 400 });
     }
 
-    const sql = getDb();
     if (sql) {
       try {
         await initDb();
