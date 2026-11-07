@@ -105,6 +105,52 @@ skillCmd
   });
 
 skillCmd
+  .command('push <name>')
+  .description('Sobe e salva uma skill no seu repositório central do GitHub (Mauthope/antigravity-hub)')
+  .action((name: string) => {
+    const paths = resolveHubPaths();
+    const sourceLocal = path.join(paths.localSkillsDir, name);
+    const sourceGlobal = path.join(paths.globalSkillsDir, name);
+    const sourceDir = fs.existsSync(sourceGlobal) ? sourceGlobal : fs.existsSync(sourceLocal) ? sourceLocal : null;
+
+    if (!sourceDir) {
+      console.error(`\n❌ Skill '${name}' não encontrada nem em local (.agents/skills) nem em global (~/.gemini/config/skills).\n`);
+      process.exit(1);
+    }
+
+    const repoSkillsDir = path.join('/home/antigravity/antigravity-hub/skills', name);
+    ensureDir(repoSkillsDir);
+
+    const cpFiles = (src: string, dest: string) => {
+      ensureDir(dest);
+      const entries = fs.readdirSync(src, { withFileTypes: true });
+      for (const entry of entries) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+        if (entry.isDirectory()) {
+          cpFiles(srcPath, destPath);
+        } else {
+          fs.copyFileSync(srcPath, destPath);
+        }
+      }
+    };
+
+    cpFiles(sourceDir, repoSkillsDir);
+
+    try {
+      const { execSync } = require('node:child_process');
+      execSync(`git add skills/${name} && git commit -m "feat(skills): save ${name} to cloud hub" && git push origin main`, {
+        cwd: '/home/antigravity/antigravity-hub',
+        stdio: 'inherit',
+      });
+      console.log(`\n🎉 Sucesso! A skill '${name}' foi salva e enviada para o seu GitHub:`);
+      console.log(`   👉 https://github.com/Mauthope/antigravity-hub/tree/main/skills/${name}\n`);
+    } catch (err) {
+      console.error(`\n❌ Erro ao enviar para o GitHub: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  });
+
+skillCmd
   .command('create <name>')
   .description('Cria um esqueleto padronizado de nova skill com frontmatter YAML')
   .option('-g, --global', 'Cria no escopo global')
