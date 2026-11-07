@@ -30,6 +30,7 @@ export default function HomePage() {
 
   // Active Preview Modal
   const [previewAgent, setPreviewAgent] = useState<AgentMd | null>(null);
+  const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -64,6 +65,7 @@ export default function HomePage() {
       const res = await fetch('/api/agents');
       if (res.ok) {
         const data = await res.json();
+        setDbConnected(!!data.databaseConnected);
         if (Array.isArray(data.agents) && data.agents.length > 0) {
           // Merge avoiding duplicates
           const merged = [...data.agents];
@@ -264,7 +266,17 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {dbConnected ? (
+              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                🐘 Neon DB (agents_mpg)
+              </span>
+            ) : (
+              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20" title="Adicione DATABASE_URL na Vercel para sincronizar com seu projeto Neon">
+                🐘 Neon: Conectando...
+              </span>
+            )}
             <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               🛡️ Apenas MIT & Apache-2.0
             </span>

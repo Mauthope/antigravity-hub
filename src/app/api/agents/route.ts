@@ -2,15 +2,13 @@ import { NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { getDb, initDb } from '@/lib/db';
 
 function getAgentsDir(): string {
-  // On Vercel / AWS Lambda, process.cwd() (/var/task) is read-only!
-  // Only /tmp is writable.
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
     return path.join(os.tmpdir(), 'agents');
   }
 
-  // Try local cwd, fallback to tmpdir if not writable
   const localDir = path.join(process.cwd(), 'agents');
   try {
     if (!fs.existsSync(localDir)) {
@@ -35,10 +33,40 @@ function ensureAgentsDir(): string {
 }
 
 export async function GET() {
+  const sql = getDb();
+
+  // 1. Try Neon Database first
+  if (sql) {
+    try {
+      await initDb();
+      const rows = await sql`
+        SELECT name, title, content, file_name, source_url, license, created_at, updated_at
+        FROM agents
+        ORDER BY id DESC;
+      `;
+
+      const agents = rows.map((r) => ({
+        name: r.name,
+        fileName: r.file_name,
+        title: r.title,
+        content: r.content,
+        chatCommand: `/${r.name}`,
+        sourceUrl: r.source_url,
+        license: r.license,
+        database: 'Neon PostgreSQL',
+      }));
+
+      return NextResponse.json({ agents, databaseConnected: true });
+    } catch (dbErr) {
+      console.warn('Erro ao consultar Neon DB, usando fallback local:', dbErr);
+    }
+  }
+
+  // 2. Fallback to local files
   try {
     const dir = ensureAgentsDir();
     if (!fs.existsSync(dir)) {
-      return NextResponse.json({ agents: [] });
+      return NextResponse.json({ agents: [], databaseConnected: false });
     }
 
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
@@ -56,22 +84,23 @@ export async function GET() {
           title,
           content,
           chatCommand: `/${name}`,
+          database: 'Local File',
         };
       } catch {
         return null;
       }
     }).filter(Boolean);
 
-    return NextResponse.json({ agents });
-  } catch (err) {
-    return NextResponse.json({ agents: [] });
+    return NextResponse.json({ agents, databaseConnected: false });
+  } catch {
+    return NextResponse.json({ agents: [], databaseConnected: false });
   }
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { name, content } = body;
+    const { name, content, sourceUrl, license } = body;
 
     if (!name || !content) {
       return NextResponse.json({ error: 'Nome e conteúdo (.md) são obrigatórios' }, { status: 400 });
@@ -79,27 +108,53 @@ export async function POST(request: Request) {
 
     const cleanName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-|-$/g, '') || 'custom-agent';
     const fileName = `${cleanName}.md`;
+    const titleMatch = content.match(/^#+\s*(.+)$/m);
+    const title = titleMatch ? titleMatch[1].trim() : cleanName;
 
-    // Try saving to writable dir (/tmp/agents on Vercel)
+    const sql = getDb();
+    let savedInNeon = false;
+
+    // 1. Save to Neon PostgreSQL
+    if (sql) {
+      try {
+        await initDb();
+        await sql`
+          INSERT INTO agents (name, title, content, file_name, source_url, license, updated_at)
+          VALUES (${cleanName}, ${title}, ${content}, ${fileName}, ${sourceUrl || null}, ${license || null}, CURRENT_TIMESTAMP)
+          ON CONFLICT (name) DO UPDATE SET
+            title = EXCLUDED.title,
+            content = EXCLUDED.content,
+            file_name = EXCLUDED.file_name,
+            source_url = EXCLUDED.source_url,
+            license = EXCLUDED.license,
+            updated_at = CURRENT_TIMESTAMP;
+        `;
+        savedInNeon = true;
+      } catch (dbErr) {
+        console.warn('Erro ao salvar no Neon PostgreSQL:', dbErr);
+      }
+    }
+
+    // 2. Also try writing to local fallback
     try {
       const dir = ensureAgentsDir();
       const filePath = path.join(dir, fileName);
       fs.writeFileSync(filePath, content, 'utf-8');
-    } catch (fsErr) {
-      console.warn('Aviso: Sistema de arquivos read-only no Vercel, respondendo sucesso para armazenamento no cliente:', fsErr);
+    } catch {
+      // ignore
     }
-
-    const titleMatch = content.match(/^#+\s*(.+)$/m);
-    const title = titleMatch ? titleMatch[1].trim() : cleanName;
 
     return NextResponse.json({
       success: true,
+      savedIn: savedInNeon ? 'Neon PostgreSQL' : 'Local / Cache',
       agent: {
         name: cleanName,
         fileName,
         title,
         chatCommand: `/${cleanName}`,
         content,
+        sourceUrl,
+        license,
       },
     }, { status: 201 });
   } catch (err) {
@@ -117,6 +172,16 @@ export async function DELETE(request: Request) {
 
     if (!name) {
       return NextResponse.json({ error: 'Nome é obrigatório' }, { status: 400 });
+    }
+
+    const sql = getDb();
+    if (sql) {
+      try {
+        await initDb();
+        await sql`DELETE FROM agents WHERE name = ${name};`;
+      } catch (err) {
+        console.warn('Erro ao deletar do Neon:', err);
+      }
     }
 
     const fileName = `${name}.md`;
