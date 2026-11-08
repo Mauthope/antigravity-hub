@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import {
   detectAgentCategory,
   parseAgentDetails,
+  loadBundledAgentsFromRepo,
 } from '../dist/lib/db.js';
 import {
   fetchAllAgents,
+  fetchAgentByName,
   persistAgent,
   removeAgent,
 } from '../dist/mcp-server/server.js';
@@ -98,4 +100,34 @@ describe('Antigravity Hub - Sistema de Categorização de Agentes', () => {
       await removeAgent(nameSec);
     }
   });
+
+  test('Agente oficial "start" deve estar presente no catálogo com os 6 requisitos obrigatórios', async () => {
+    const bundled = loadBundledAgentsFromRepo();
+    const startBundled = bundled.find((a) => a.name === 'start');
+    assert.ok(startBundled, 'Agente start deve existir em agents/start.md');
+    assert.equal(startBundled.category, 'orchestration');
+
+    const startMcp = await fetchAgentByName('start');
+    assert.ok(startMcp, 'Agente start deve ser retornável pelo MCP Server');
+    assert.equal(startMcp.category, 'orchestration');
+
+    // Valida presença das diretrizes obrigatórias no prompt
+    assert.ok(startMcp.content.includes('Puxar o Escopo'), 'Deve puxar o escopo');
+    assert.ok(startMcp.content.includes('Agente de Designer'), 'Deve pedir escolha do Agente de Designer');
+    assert.ok(startMcp.content.includes('Multi-Tenant'), 'Deve arquitetar sistema Multi-Tenant');
+    assert.ok(startMcp.content.includes('tenant_id'), 'Deve incluir modelagem tenant_id');
+    assert.ok(startMcp.content.includes('Next.js') && startMcp.content.includes('Tailwind CSS'), 'Deve usar Next.js + Tailwind CSS');
+    assert.ok(startMcp.content.includes('100% Responsiv'), 'Deve exigir 100% de responsividade');
+    assert.ok(startMcp.content.includes('GitHub'), 'Deve criar novo repositório no GitHub');
+    assert.ok(startMcp.content.includes('DATABASE_URL') && startMcp.content.includes('NEXT_PUBLIC_SUPABASE_URL'), 'Deve entregar variáveis da Vercel para Neon e Supabase');
+  });
+
+  test('Agente oficial "designer-akiom" deve estar disponível na categoria "design" para seleção pelo start', async () => {
+    const designAgents = await fetchAllAgents('design');
+    assert.ok(
+      designAgents.some((a) => a.name === 'designer-akiom'),
+      'designer-akiom deve estar listado na categoria design'
+    );
+  });
 });
+

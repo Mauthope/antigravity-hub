@@ -9,6 +9,7 @@ import {
   detectAgentCategory,
   resolveDatabaseEnv,
   upsertAgentInDb,
+  loadBundledAgentsFromRepo,
 } from '@/lib/db';
 import { AGENT_CATEGORIES } from '@/types';
 
@@ -161,6 +162,26 @@ export async function GET(request: Request) {
           }
         })
         .filter(Boolean);
+    }
+
+    // Garante que agentes oficiais do repositório (ex: start, designer-akiom) apareçam mesmo em /tmp na Vercel
+    for (const bundled of loadBundledAgentsFromRepo()) {
+      if (!allAgents.some((a) => a.name === bundled.name)) {
+        const details = parseAgentDetails(bundled.content, bundled.name, bundled.category);
+        allAgents.push({
+          name: bundled.name,
+          fileName: bundled.fileName,
+          title: bundled.title,
+          category: bundled.category,
+          whatItDoes: details.whatItDoes,
+          whenToUse: details.whenToUse,
+          tags: details.tags,
+          content: bundled.content,
+          chatCommand: `/${bundled.name}`,
+          license: bundled.license,
+          database: 'Catálogo Oficial',
+        });
+      }
     }
 
     const categoryCounts: Record<string, number> = { all: allAgents.length };

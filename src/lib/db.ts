@@ -145,8 +145,74 @@ export function getDb() {
 }
 
 /**
- * Cria a tabela `agents` se não existir. Propaga erros reais caso a conexão
- * ou permissão falhe (sem engolir exceções silenciosamente).
+ * Lê agentes oficiais incluídos no repositório (`agents/*.md`, como `start.md` e `designer-akiom.md`).
+ */
+export function loadBundledAgentsFromRepo(): Array<{
+  name: string;
+  title: string;
+  content: string;
+  fileName: string;
+  category: string;
+  license: string;
+}> {
+  try {
+    if (typeof process === 'undefined' || typeof (process as any).getBuiltinModule !== 'function') {
+      return [];
+    }
+    const fs = (process as any).getBuiltinModule('node:fs') as typeof import('node:fs');
+    const path = (process as any).getBuiltinModule('node:path') as typeof import('node:path');
+    if (!fs || !path) return [];
+
+    const repoAgentsDir = path.join(process.cwd(), 'agents');
+    if (!fs.existsSync(repoAgentsDir)) {
+      return [];
+    }
+
+    const files = fs
+      .readdirSync(repoAgentsDir)
+      .filter((f: string) => f.endsWith('.md'));
+
+    const bundled: Array<{
+      name: string;
+      title: string;
+      content: string;
+      fileName: string;
+      category: string;
+      license: string;
+    }> = [];
+
+    for (const fileName of files) {
+      try {
+        const fullPath = path.join(repoAgentsDir, fileName);
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        const name = fileName.replace(/\.md$/, '');
+        const details = parseAgentDetails(content, name);
+        const licenseMatch = content.match(/^license:\s*(.+)$/im);
+        const license = licenseMatch ? licenseMatch[1].trim() : 'MIT';
+
+        bundled.push({
+          name,
+          title: details.title,
+          content,
+          fileName,
+          category: details.category,
+          license,
+        });
+      } catch {
+        // ignore invalid file
+      }
+    }
+
+    return bundled;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Cria a tabela `agents` se não existir e garante o registro automático dos
+ * agentes base do repositório (`start`, `designer-akiom`, etc.).
+ * Propaga erros reais caso a conexão ou permissão falhe.
  */
 export async function initDb(): Promise<ResolvedDbEnv | null> {
   const resolved = resolveDatabaseEnv();
@@ -173,6 +239,25 @@ export async function initDb(): Promise<ResolvedDbEnv | null> {
     await sql`
       ALTER TABLE agents ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'general';
     `;
+
+    // Sincroniza agentes nativos do repositório (sem sobrescrever edições já feitas no banco)
+    const bundled = loadBundledAgentsFromRepo();
+    for (const agent of bundled) {
+      await sql`
+        INSERT INTO agents (name, title, content, file_name, category, license, updated_at)
+        VALUES (
+          ${agent.name},
+          ${agent.title},
+          ${agent.content},
+          ${agent.fileName},
+          ${agent.category},
+          ${agent.license},
+          CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (name) DO NOTHING;
+      `;
+    }
+
     lastInitializedHostDb = cacheKey;
   }
 
