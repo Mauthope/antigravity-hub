@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Layers,
   Bot,
@@ -23,15 +23,17 @@ import {
   Palette,
   Cloud,
   X,
-  HelpCircle,
   RefreshCw,
   CheckCircle2,
   Cpu,
+  AlertTriangle,
+  HardDrive,
 } from 'lucide-react';
 import { GlassCapsuleButton } from '@/components/ui/glass-capsule-button';
 import { SquircleKpiCard } from '@/components/ui/squircle-kpi-card';
 
 interface AgentMd {
+  id?: number;
   name: string;
   fileName: string;
   title: string;
@@ -40,7 +42,22 @@ interface AgentMd {
   tags?: string[];
   content: string;
   chatCommand: string;
+  sourceUrl?: string | null;
+  license?: string | null;
   database?: string;
+}
+
+interface DbDetails {
+  connected: boolean;
+  configured: boolean;
+  envVarName?: string;
+  host?: string;
+  databaseName?: string;
+  tableExists?: boolean;
+  agentCount?: number;
+  timestamp?: string;
+  message: string;
+  error?: string;
 }
 
 const STORAGE_KEY = 'antigravity_hub_agents_v4';
@@ -53,12 +70,17 @@ export default function HomePage() {
   // Upload/Manual State
   const [uploadName, setUploadName] = useState('');
   const [uploadContent, setUploadContent] = useState('');
+  const [isSavingManual, setIsSavingManual] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{
+    type: 'success' | 'warning' | 'error';
+    message: string;
+  } | null>(null);
 
   // GitHub Import State
   const [githubUrl, setGithubUrl] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [githubStatus, setGithubStatus] = useState<{
-    type: 'success' | 'error';
+    type: 'success' | 'warning' | 'error';
     message: string;
   } | null>(null);
 
@@ -68,20 +90,15 @@ export default function HomePage() {
   const [showAntigravityGuide, setShowAntigravityGuide] = useState(false);
   const [showMcpModal, setShowMcpModal] = useState(false);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
-  const [dbDetails, setDbDetails] = useState<{
-    connected: boolean;
-    configured: boolean;
-    message: string;
-    agentCount?: number;
-    error?: string;
-  } | null>(null);
+  const [dbDetails, setDbDetails] = useState<DbDetails | null>(null);
   const [isCheckingDb, setIsCheckingDb] = useState(false);
+  const [isSyncingDb, setIsSyncingDb] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3500);
+    setTimeout(() => setToast(null), 4200);
   };
 
   // Toggle Theme
@@ -108,6 +125,17 @@ export default function HomePage() {
     }
   }, []);
 
+  const readFromStorage = (): AgentMd[] => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
   const saveToStorage = (list: AgentMd[]) => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
@@ -116,64 +144,172 @@ export default function HomePage() {
     }
   };
 
-  const checkNeonStatus = async () => {
+  const checkNeonStatus = useCallback(async (forceInit = false) => {
     setIsCheckingDb(true);
     try {
-      const res = await fetch('/api/db-status');
-      if (res.ok) {
-        const data = await res.json();
-        setDbDetails(data);
-        setDbConnected(!!data.connected);
-      }
+      const res = await fetch('/api/db-status', {
+        method: forceInit ? 'POST' : 'GET',
+        cache: 'no-store',
+      });
+      const data: DbDetails = await res.json();
+      setDbDetails(data);
+      setDbConnected(!!data.connected);
+      return data;
     } catch {
-      // ignore
+      return null;
     } finally {
       setIsCheckingDb(false);
     }
-  };
+  }, []);
 
-  const fetchAgents = async () => {
+  const fetchAgents = useCallback(async () => {
+    const cachedLocal = readFromStorage();
+
     try {
-      const res = await fetch('/api/agents');
-      if (res.ok) {
-        const data = await res.json();
-        setDbConnected(!!data.databaseConnected);
-        const list = Array.isArray(data.agents) ? data.agents : [];
-        setAgents(list);
-        saveToStorage(list);
+      const res = await fetch('/api/agents', { cache: 'no-store' });
+      const data = await res.json();
+
+      const connected = Boolean(data.databaseConnected);
+      setDbConnected(connected);
+
+      if (data.dbError || data.dbMeta) {
+        setDbDetails((prev) => ({
+          connected,
+          configured: Boolean(data.databaseConfigured),
+          envVarName: data.dbMeta?.envVarName ?? prev?.envVarName,
+          host: data.dbMeta?.host ?? prev?.host,
+          databaseName: data.dbMeta?.databaseName ?? prev?.databaseName,
+          tableExists: prev?.tableExists,
+          agentCount: connected ? (data.agents?.length ?? 0) : prev?.agentCount,
+          message:
+            prev?.message ||
+            (connected
+              ? `Conectado ao Neon (${data.dbMeta?.databaseName || 'neondb'}).`
+              : data.dbError
+              ? 'Falha ao consultar o Neon PostgreSQL.'
+              : 'DATABASE_URL ainda nao configurada neste ambiente.'),
+          error: data.dbError ?? prev?.error,
+        }));
+      }
+
+      let serverList: AgentMd[] = Array.isArray(data.agents) ? data.agents : [];
+
+      if (connected) {
+        // Auto-sync any agents previously saved in localStorage ('Cache Local') into Neon
+        const serverNames = new Set(serverList.map((a) => a.name));
+        const unsyncedLocal = cachedLocal.filter(
+          (localAg) =>
+            localAg &&
+            localAg.name &&
+            localAg.content &&
+            localAg.database !== 'Neon PostgreSQL' &&
+            !serverNames.has(localAg.name)
+        );
+
+        if (unsyncedLocal.length > 0) {
+          try {
+            const syncRes = await fetch('/api/agents', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ agents: unsyncedLocal }),
+            });
+            if (syncRes.ok) {
+              const syncData = await syncRes.json();
+              if (Array.isArray(syncData.agents) && syncData.agents.length > 0) {
+                serverList = [...syncData.agents, ...serverList];
+                showToast(
+                  `${syncData.agents.length} agente(s) locais sincronizados com a tabela 'agents' na Neon.`
+                );
+              }
+            }
+          } catch {
+            // ignore auto-sync failure
+          }
+        }
+
+        setAgents(serverList);
+        saveToStorage(serverList);
+      } else {
+        // When Neon is not connected (e.g. serverless fallback), merge server files + cached localStorage agents
+        const mergedMap = new Map<string, AgentMd>();
+        for (const item of serverList) {
+          mergedMap.set(item.name, { ...item, database: 'Cache Local' });
+        }
+        for (const localItem of cachedLocal) {
+          if (!mergedMap.has(localItem.name)) {
+            mergedMap.set(localItem.name, { ...localItem, database: 'Cache Local' });
+          }
+        }
+        const mergedList = Array.from(mergedMap.values());
+        setAgents(mergedList);
+        saveToStorage(mergedList);
       }
     } catch {
-      // offline fallback
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-          setAgents(JSON.parse(saved));
-        }
-      } catch {
-        // ignore
+      if (cachedLocal.length > 0) {
+        setAgents(cachedLocal);
       }
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchAgents();
-    checkNeonStatus();
-  }, []);
+    checkNeonStatus(false);
+  }, [fetchAgents, checkNeonStatus]);
+
+  const handleForceInitAndSync = async () => {
+    setIsSyncingDb(true);
+    try {
+      const status = await checkNeonStatus(true);
+      if (!status || !status.connected) {
+        showToast(
+          status?.error
+            ? `Erro no Neon: ${status.error}`
+            : 'Configure a variavel DATABASE_URL na Vercel e faca Redeploy primeiro.'
+        );
+        return;
+      }
+
+      if (agents.length > 0) {
+        const res = await fetch('/api/agents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agents }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showToast(data.error || 'Falha ao sincronizar agentes com o Neon.');
+          return;
+        }
+      }
+
+      await fetchAgents();
+      await checkNeonStatus(false);
+      showToast('Tabela verificada e catalogo sincronizado com sucesso no Neon PostgreSQL.');
+    } catch {
+      showToast('Falha de rede ao sincronizar com o banco Neon.');
+    } finally {
+      setIsSyncingDb(false);
+    }
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const baseName = file.name.replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    const baseName = file.name
+      .replace(/\.md$/i, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-');
     setUploadName(baseName);
+    setUploadStatus(null);
 
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
       setUploadContent(text);
-      showToast(`Arquivo '${file.name}' carregado no formulário.`);
+      showToast(`Arquivo '${file.name}' carregado no formulario.`);
     };
     reader.readAsText(file);
   };
@@ -181,11 +317,18 @@ export default function HomePage() {
   const handleSaveManual = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadName.trim() || !uploadContent.trim()) {
-      showToast('Preencha o identificador e o conteúdo markdown do agente.');
+      showToast('Preencha o identificador e o conteudo markdown do agente.');
       return;
     }
 
-    const cleanName = uploadName.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-|-$/g, '') || 'custom-agent';
+    const cleanName =
+      uploadName
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-')
+        .replace(/^-|-$/g, '') || 'custom-agent';
+
+    setIsSavingManual(true);
+    setUploadStatus(null);
 
     try {
       const res = await fetch('/api/agents', {
@@ -197,19 +340,49 @@ export default function HomePage() {
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && data.agent) {
         const updated = [data.agent, ...agents.filter((a) => a.name !== cleanName)];
         setAgents(updated);
         saveToStorage(updated);
-        showToast(`Agente ${cleanName}.md registrado com sucesso.`);
         setUploadName('');
         setUploadContent('');
+
+        if (data.savedInNeon) {
+          setDbConnected(true);
+          setUploadStatus({
+            type: 'success',
+            message: `Agente '${cleanName}.md' gravado na tabela 'agents' do Neon PostgreSQL.`,
+          });
+          showToast(`Agente '${cleanName}.md' salvo no Neon PostgreSQL.`);
+          checkNeonStatus(false);
+        } else {
+          setUploadStatus({
+            type: 'warning',
+            message:
+              data.warning ||
+              'Salvo em Cache Local: adicione DATABASE_URL na Vercel e faca Redeploy para gravar na tabela da Neon.',
+          });
+          showToast(`Agente '${cleanName}.md' salvo localmente (conecte o Neon para persistir na nuvem).`);
+        }
       } else {
-        showToast('Falha ao registrar agente.');
+        const errorMsg = data.error || 'Falha ao registrar agente no servidor.';
+        setUploadStatus({
+          type: 'error',
+          message: errorMsg,
+        });
+        showToast(errorMsg);
+        checkNeonStatus(false);
       }
     } catch {
-      showToast('Erro de conexão ao salvar.');
+      setUploadStatus({
+        type: 'error',
+        message: 'Erro de conexao com o servidor ao salvar agente.',
+      });
+      showToast('Erro de conexao ao salvar.');
+    } finally {
+      setIsSavingManual(false);
     }
   };
 
@@ -227,53 +400,55 @@ export default function HomePage() {
         body: JSON.stringify({ url: githubUrl }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.ok && data.valid) {
-        // Save to agents API
-        const saveRes = await fetch('/api/agents', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: data.name,
-            content: data.content,
-            sourceUrl: githubUrl,
-            license: data.license,
-          }),
-        });
-
-        const savedData = await saveRes.json();
-        const agentToAdd = savedData.agent || {
+        const agentToAdd: AgentMd = data.agent || {
           name: data.name,
           fileName: `${data.name}.md`,
           title: data.title,
-          whatItDoes: 'Agente importado do GitHub com licença auditada.',
+          whatItDoes: 'Agente importado do GitHub com licenca auditada.',
           whenToUse: 'Invoque no chat para executar tarefas desta especialidade.',
           tags: ['GitHub', data.license],
           content: data.content,
           chatCommand: `/${data.name}`,
+          sourceUrl: githubUrl,
+          license: data.license,
+          database: data.savedInNeon ? 'Neon PostgreSQL' : 'Cache Local',
         };
 
         const updated = [agentToAdd, ...agents.filter((a) => a.name !== data.name)];
         setAgents(updated);
         saveToStorage(updated);
-
-        setGithubStatus({
-          type: 'success',
-          message: `Agente '${data.name}.md' auditado e salvo. Licença: ${data.license} (0% risco legal).`,
-        });
         setGithubUrl('');
-        showToast(`Agente '${data.name}.md' adicionado com sucesso.`);
+
+        if (data.savedInNeon) {
+          setDbConnected(true);
+          setGithubStatus({
+            type: 'success',
+            message: `Agente '${data.name}.md' auditado (${data.license} — 0% risco legal) e gravado na tabela 'agents' do Neon PostgreSQL.`,
+          });
+          showToast(`Agente '${data.name}.md' salvo no Neon PostgreSQL.`);
+          checkNeonStatus(false);
+        } else {
+          setGithubStatus({
+            type: 'warning',
+            message:
+              data.warning ||
+              `Licenca ${data.license} aprovada, mas salvo em Cache Local (configure DATABASE_URL na Vercel e faca Redeploy).`,
+          });
+          showToast(`Agente '${data.name}.md' salvo localmente.`);
+        }
       } else {
         setGithubStatus({
           type: 'error',
-          message: data.error || 'Falha ao auditar e importar repositório.',
+          message: data.error || 'Falha ao auditar e importar repositorio.',
         });
       }
     } catch {
       setGithubStatus({
         type: 'error',
-        message: 'Falha na conexão com o serviço de importação.',
+        message: 'Falha na conexao com o servico de importacao.',
       });
     } finally {
       setIsImporting(false);
@@ -289,7 +464,12 @@ export default function HomePage() {
     showToast(`Agente '${name}.md' removido.`);
 
     try {
-      await fetch(`/api/agents?name=${name}`, { method: 'DELETE' });
+      const res = await fetch(`/api/agents?name=${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      });
+      if (res.ok && dbConnected) {
+        checkNeonStatus(false);
+      }
     } catch {
       // ignore
     }
@@ -298,7 +478,7 @@ export default function HomePage() {
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
-    showToast(`Comando copiado: ${text}`);
+    showToast(`Copiado para a area de transferencia.`);
     setTimeout(() => setCopiedId(null), 2500);
   };
 
@@ -326,13 +506,16 @@ export default function HomePage() {
     return <Bot className="w-5 h-5 text-blue-500" strokeWidth={2} />;
   };
 
+  const hasDbError = Boolean(dbDetails?.configured && !dbConnected);
+  const localOnlyCount = agents.filter((a) => a.database !== 'Neon PostgreSQL').length;
+
   return (
     <div className="min-h-screen antialiased p-4 sm:p-6 lg:p-10 transition-colors duration-300">
       {/* TOAST */}
       {toast && (
-        <div className="fixed top-6 right-6 z-50 bg-slate-900 dark:bg-slate-800 text-white px-5 py-3 rounded-2xl shadow-2xl text-xs font-heading font-bold flex items-center gap-2.5 border border-cyan-500/40">
-          <Sparkles className="w-4 h-4 text-cyan-400" strokeWidth={2} />
-          {toast}
+        <div className="fixed top-6 right-6 z-50 max-w-md bg-slate-900 dark:bg-slate-800 text-white px-5 py-3.5 rounded-2xl shadow-2xl text-xs font-heading font-bold flex items-center gap-2.5 border border-cyan-500/40">
+          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" strokeWidth={2} />
+          <span className="leading-snug">{toast}</span>
         </div>
       )}
 
@@ -359,25 +542,34 @@ export default function HomePage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* Database Badge Button */}
+            {/* Database Badge Button (3 Real-Time States) */}
             {dbConnected ? (
               <button
                 onClick={() => setShowNeonModal(true)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 transition-colors cursor-pointer"
-                title="Neon PostgreSQL conectado. Clique para ver detalhes da conexão."
+                title="Neon PostgreSQL conectado. Clique para inspecionar tabela e registros."
               >
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <Database className="w-3.5 h-3.5" strokeWidth={2} />
-                Neon: agents_mpg (Ativo)
+                Neon: {dbDetails?.databaseName || 'agents_mpg'} (Ativo)
+              </button>
+            ) : hasDbError ? (
+              <button
+                onClick={() => setShowNeonModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors cursor-pointer"
+                title="Variavel encontrada, mas falha ao conectar no Neon. Clique para diagnosticar."
+              >
+                <AlertTriangle className="w-3.5 h-3.5" strokeWidth={2} />
+                Neon: Erro de Conexao (Diagnosticar)
               </button>
             ) : (
               <button
                 onClick={() => setShowNeonModal(true)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-heading font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25 hover:bg-amber-500/20 transition-colors cursor-pointer"
-                title="Clique para ver instruções de conexão com o Neon no Vercel"
+                title="Clique para conectar sua DATABASE_URL do Neon na Vercel"
               >
                 <Database className="w-3.5 h-3.5" strokeWidth={2} />
-                Neon: Configurar Conexão
+                Neon: Configurar Conexao
               </button>
             )}
 
@@ -402,21 +594,68 @@ export default function HomePage() {
               className="p-2.5 rounded-full bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-cyan-500 transition-colors cursor-pointer"
               title="Alternar Modo Claro / Escuro"
             >
-              {isDark ? <Sun className="w-4 h-4 text-amber-400" strokeWidth={2} /> : <Moon className="w-4 h-4 text-indigo-600" strokeWidth={2} />}
+              {isDark ? (
+                <Sun className="w-4 h-4 text-amber-400" strokeWidth={2} />
+              ) : (
+                <Moon className="w-4 h-4 text-indigo-600" strokeWidth={2} />
+              )}
             </button>
 
             {/* GitHub Link */}
             <a
-              href="https://github.com/Mauthope/antigravity-hub/tree/main/agents"
+              href="https://github.com/Mauthope/antigravity-hub"
               target="_blank"
               rel="noreferrer"
               className="p-2.5 rounded-full bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-cyan-500 transition-colors"
-              title="Ver repositório no GitHub"
+              title="Ver repositorio no GitHub"
             >
               <ExternalLink className="w-4 h-4" strokeWidth={2} />
             </a>
           </div>
         </nav>
+
+        {/* LIVE DIAGNOSTIC BANNER WHEN NEON HAS AN ERROR OR UNSYNCED LOCAL AGENTS */}
+        {hasDbError && dbDetails?.error && (
+          <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-800 dark:text-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" strokeWidth={2} />
+              <div className="space-y-1">
+                <span className="font-heading font-bold text-sm block">
+                  Falha na Conexao com o Neon ({dbDetails.envVarName || 'DATABASE_URL'})
+                </span>
+                <p className="font-mono text-[11px] opacity-90 break-all">{dbDetails.error}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowNeonModal(true)}
+              className="px-4 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-heading font-bold text-xs shrink-0 transition-colors cursor-pointer"
+            >
+              Abrir Diagnostico
+            </button>
+          </div>
+        )}
+
+        {dbConnected === false && !hasDbError && localOnlyCount > 0 && (
+          <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
+            <div className="flex items-start gap-3">
+              <HardDrive className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" strokeWidth={2} />
+              <div className="space-y-1">
+                <span className="font-heading font-bold text-sm block">
+                  {localOnlyCount} agente(s) estao apenas em Cache Local neste navegador
+                </span>
+                <p className="opacity-90">
+                  A tabela na Neon continua vazia porque nenhuma variavel <code className="font-mono font-bold">DATABASE_URL</code> ativa foi detectada no deploy da Vercel. Assim que conectar e fizer Redeploy, eles serao enviados automaticamente para a tabela <code className="font-mono font-bold">agents</code>.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowNeonModal(true)}
+              className="px-4 py-2 rounded-full bg-amber-600 hover:bg-amber-500 text-white font-heading font-bold text-xs shrink-0 transition-colors cursor-pointer"
+            >
+              Conectar Neon Agora
+            </button>
+          </div>
+        )}
 
         {/* HERO SECTION */}
         <section className="space-y-3">
@@ -424,7 +663,7 @@ export default function HomePage() {
             Orquestrador de Agentes Markdown & Servidor MCP
           </h1>
           <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 max-w-3xl leading-relaxed">
-            Centralize seus agentes em Markdown e acione-os nativamente dentro do Antigravity como ferramentas do protocolo MCP. Seus agentes salvos na nuvem ficam instantaneamente acessíveis na conversa.
+            Centralize seus agentes em Markdown e acione-os nativamente dentro do Antigravity como ferramentas do protocolo MCP. Seus agentes salvos no Neon PostgreSQL ficam instantaneamente acessiveis na conversa.
           </p>
         </section>
 
@@ -435,16 +674,22 @@ export default function HomePage() {
             title="Agentes Prontos"
             value={agents.length}
             unit="ativos"
-            subtitle="Disponíveis no Hub"
+            subtitle="Disponiveis no Hub"
             icon={Bot}
             color="blue"
           />
           <SquircleKpiCard
             badgeNumber={2}
             title="Banco Neon"
-            value={dbConnected ? "Conectado" : "Local / Cache"}
+            value={dbConnected ? 'Conectado' : hasDbError ? 'Com Erro' : 'Cache Local'}
             unit=""
-            subtitle={dbConnected ? "Projeto agents_mpg" : "Adicione DATABASE_URL"}
+            subtitle={
+              dbConnected
+                ? `Database: ${dbDetails?.databaseName || 'neondb'}`
+                : hasDbError
+                ? 'Clique no topo para corrigir'
+                : 'Adicione DATABASE_URL + Redeploy'
+            }
             icon={Database}
             color="emerald"
           />
@@ -480,7 +725,7 @@ export default function HomePage() {
                 </h2>
               </div>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                Carregue um arquivo <code className="font-mono text-cyan-600 dark:text-cyan-300 font-bold">.md</code> do seu computador ou escreva a instrução abaixo:
+                Carregue um arquivo <code className="font-mono text-cyan-600 dark:text-cyan-300 font-bold">.md</code> do seu computador ou escreva a instrucao abaixo:
               </p>
             </div>
 
@@ -499,7 +744,7 @@ export default function HomePage() {
 
               <div>
                 <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-heading font-bold uppercase tracking-wider text-[11px]">
-                  Identificador do Agente (sem espaços):
+                  Identificador do Agente (sem espacos):
                 </label>
                 <input
                   type="text"
@@ -513,27 +758,42 @@ export default function HomePage() {
 
               <div>
                 <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-heading font-bold uppercase tracking-wider text-[11px]">
-                  Conteúdo Markdown do Agente:
+                  Conteudo Markdown do Agente:
                 </label>
                 <textarea
                   value={uploadContent}
                   onChange={(e) => setUploadContent(e.target.value)}
                   rows={4}
-                  placeholder="# Título do Agente&#10;&#10;## O Que Este Agente Faz&#10;Explique de forma simples o objetivo...&#10;&#10;## Quando Usar&#10;Indique o momento de chamar no chat..."
+                  placeholder="# Titulo do Agente&#10;&#10;## O Que Este Agente Faz&#10;Explique de forma simples o objetivo...&#10;&#10;## Quando Usar&#10;Indique o momento de chamar no chat..."
                   className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-600 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   required
                 />
               </div>
+
+              {uploadStatus && (
+                <div
+                  className={`p-3.5 rounded-2xl border text-xs leading-relaxed ${
+                    uploadStatus.type === 'success'
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      : uploadStatus.type === 'warning'
+                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                      : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+                  }`}
+                >
+                  {uploadStatus.message}
+                </div>
+              )}
 
               <div className="pt-2">
                 <GlassCapsuleButton
                   type="submit"
                   variant="primary"
                   size="md"
+                  isLoading={isSavingManual}
                   icon={<FileText className="w-4 h-4" strokeWidth={2} />}
                   className="w-full justify-center"
                 >
-                  Salvar Agente (.md)
+                  {isSavingManual ? 'Gravando Agente...' : 'Salvar Agente (.md)'}
                 </GlassCapsuleButton>
               </div>
             </form>
@@ -545,18 +805,18 @@ export default function HomePage() {
               <div className="flex items-center gap-2.5 text-emerald-600 dark:text-emerald-400">
                 <GitPullRequest className="w-5 h-5" strokeWidth={2.2} />
                 <h2 className="font-heading font-bold text-lg sm:text-xl text-slate-900 dark:text-white">
-                  Salvar de Repositório GitHub
+                  Salvar de Repositorio GitHub
                 </h2>
               </div>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                Cole a URL de qualquer repositório no GitHub para auditar a licença e salvar o agente:
+                Cole a URL de qualquer repositorio ou arquivo <code className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">.md</code> no GitHub para auditar a licenca e gravar no Neon:
               </p>
             </div>
 
             <form onSubmit={handleImportGithub} className="space-y-4 text-xs">
               <div>
                 <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-heading font-bold uppercase tracking-wider text-[11px]">
-                  URL do Repositório GitHub:
+                  URL do Repositorio GitHub:
                 </label>
                 <input
                   type="text"
@@ -573,10 +833,10 @@ export default function HomePage() {
                   Regras de Auditoria Automatizada:
                 </span>
                 <p className="leading-relaxed">
-                  • <strong>0% Risco Jurídico:</strong> Apenas licenças permissivas <strong>MIT</strong> e <strong>Apache-2.0</strong> são autorizadas.
+                  • <strong>0% Risco Juridico:</strong> Apenas licencas permissivas <strong>MIT</strong> e <strong>Apache-2.0</strong> sao autorizadas.
                 </p>
                 <p className="leading-relaxed">
-                  • <strong>Extração Inteligente:</strong> Detecta arquivos <code className="font-mono text-cyan-600 dark:text-cyan-300">SKILL.md</code>, <code className="font-mono text-cyan-600 dark:text-cyan-300">agent.md</code> ou <code className="font-mono text-cyan-600 dark:text-cyan-300">README.md</code>.
+                  • <strong>Gravacao Atomica:</strong> Valida a licenca e insere diretamente na tabela <code className="font-mono text-cyan-600 dark:text-cyan-300">agents</code> do Neon PostgreSQL.
                 </p>
               </div>
 
@@ -585,6 +845,8 @@ export default function HomePage() {
                   className={`p-3.5 rounded-2xl border text-xs leading-relaxed ${
                     githubStatus.type === 'success'
                       ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      : githubStatus.type === 'warning'
+                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
                       : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
                   }`}
                 >
@@ -601,7 +863,7 @@ export default function HomePage() {
                   icon={<GitPullRequest className="w-4 h-4" strokeWidth={2} />}
                   className="w-full justify-center"
                 >
-                  {isImporting ? 'Auditando Licença...' : 'Baixar e Salvar como Agente'}
+                  {isImporting ? 'Auditando e Salvando...' : 'Baixar e Salvar como Agente'}
                 </GlassCapsuleButton>
               </div>
             </form>
@@ -613,25 +875,30 @@ export default function HomePage() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
             <div>
               <h2 className="font-heading font-black text-2xl text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
-                <span>Agentes Disponíveis</span>
+                <span>Agentes Disponiveis</span>
                 <span className="text-sm font-heading font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20">
                   {agents.length}
                 </span>
               </h2>
               <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-                Cada agente possui descrição simplificada de atuação e orientação de quando acioná-lo.
+                Cada agente possui descricao simplificada de atuacao, origem de persistencia e comando rapido.
               </p>
             </div>
             <div className="flex items-center gap-3">
               {agents.length > 0 && (
                 <button
                   onClick={async () => {
-                    if (confirm('Deseja excluir todos os agentes cadastrados e deixar o catálogo limpo?')) {
+                    if (
+                      confirm(
+                        'Deseja excluir todos os agentes cadastrados e deixar o catalogo limpo?'
+                      )
+                    ) {
                       setAgents([]);
                       saveToStorage([]);
                       showToast('Todos os agentes foram removidos.');
                       try {
                         await fetch('/api/agents?all=true', { method: 'DELETE' });
+                        if (dbConnected) checkNeonStatus(false);
                       } catch {
                         // ignore
                       }
@@ -641,18 +908,18 @@ export default function HomePage() {
                   title="Excluir todos os agentes"
                 >
                   <Trash2 className="w-3.5 h-3.5" strokeWidth={2} />
-                  Limpar Catálogo
+                  Limpar Catalogo
                 </button>
               )}
               <span className="text-xs font-mono text-slate-400">
-                Invocação: digite <span className="text-cyan-600 dark:text-cyan-400 font-bold">/nome</span> no chat
+                Invocacao: digite <span className="text-cyan-600 dark:text-cyan-400 font-bold">/nome</span> no chat
               </span>
             </div>
           </div>
 
           {loading ? (
             <div className="p-12 text-center text-xs font-heading font-bold text-slate-400">
-              Carregando catálogo de agentes...
+              Carregando catalogo de agentes...
             </div>
           ) : agents.length === 0 ? (
             <div className="glow-card p-12 text-center space-y-4">
@@ -661,118 +928,140 @@ export default function HomePage() {
               </div>
               <div className="space-y-1">
                 <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
-                  Catálogo Limpo e Pronto
+                  Catalogo Limpo e Pronto
                 </h3>
                 <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
-                  Nenhum agente cadastrado. Suba seus próprios arquivos <code className="font-mono text-cyan-600 dark:text-cyan-400 font-bold">.md</code> ou informe URLs do GitHub acima para adicionar seus agentes personalizados.
+                  Nenhum agente cadastrado. Suba seus proprios arquivos{' '}
+                  <code className="font-mono text-cyan-600 dark:text-cyan-400 font-bold">.md</code>{' '}
+                  ou informe URLs do GitHub acima para adicionar seus agentes personalizados.
                 </p>
               </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {agents.map((agent) => (
-                <div
-                  key={agent.name}
-                  className="glow-card p-6 flex flex-col justify-between space-y-5 group relative"
-                >
-                  <div className="space-y-4">
-                    {/* Header with Icon and Slash Command */}
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center shrink-0">
-                          {getAgentIcon(agent.name)}
+              {agents.map((agent) => {
+                const isNeonSaved = agent.database === 'Neon PostgreSQL';
+                return (
+                  <div
+                    key={agent.name}
+                    className="glow-card p-6 flex flex-col justify-between space-y-5 group relative"
+                  >
+                    <div className="space-y-4">
+                      {/* Header with Icon, Slash Command & Storage Badge */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center shrink-0">
+                            {getAgentIcon(agent.name)}
+                          </div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border border-cyan-500/25">
+                                {agent.chatCommand}
+                              </span>
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-heading font-bold border ${
+                                  isNeonSaved
+                                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
+                                    : 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25'
+                                }`}
+                              >
+                                {isNeonSaved ? (
+                                  <Database className="w-2.5 h-2.5" strokeWidth={2.2} />
+                                ) : (
+                                  <HardDrive className="w-2.5 h-2.5" strokeWidth={2.2} />
+                                )}
+                                {isNeonSaved ? 'Neon PostgreSQL' : 'Cache Local'}
+                              </span>
+                            </div>
+                            <h3 className="font-heading font-bold text-base text-slate-900 dark:text-white mt-1 leading-snug">
+                              {agent.title}
+                            </h3>
+                          </div>
                         </div>
-                        <div>
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border border-cyan-500/25">
-                            {agent.chatCommand}
-                          </span>
-                          <h3 className="font-heading font-bold text-base text-slate-900 dark:text-white mt-1 leading-snug">
-                            {agent.title}
-                          </h3>
-                        </div>
+
+                        <button
+                          onClick={() => handleDelete(agent.name)}
+                          className="text-slate-400 hover:text-red-500 transition-colors p-1 cursor-pointer"
+                          title="Remover agente"
+                        >
+                          <Trash2 className="w-4 h-4" strokeWidth={2} />
+                        </button>
                       </div>
 
-                      <button
-                        onClick={() => handleDelete(agent.name)}
-                        className="text-slate-400 hover:text-red-500 transition-colors p-1"
-                        title="Remover agente"
-                      >
-                        <Trash2 className="w-4 h-4" strokeWidth={2} />
-                      </button>
-                    </div>
-
-                    {/* Simplified Description: O Que Faz */}
-                    <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800/80 space-y-1">
-                      <span className="font-heading font-bold text-[10px] uppercase tracking-wider text-cyan-700 dark:text-cyan-400 block">
-                        O Que Este Agente Faz:
-                      </span>
-                      <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
-                        {agent.whatItDoes || agent.content.slice(0, 160)}
-                      </p>
-                    </div>
-
-                    {/* When to Use: Quando Chamar */}
-                    <div className="p-3.5 rounded-2xl bg-slate-50/60 dark:bg-slate-950/50 border border-slate-200/80 dark:border-slate-800/60 space-y-1">
-                      <span className="font-heading font-bold text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-400 block">
-                        Quando Chamar no Chat:
-                      </span>
-                      <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                        {agent.whenToUse || 'Invoque no chat quando precisar de auxílio especializado.'}
-                      </p>
-                    </div>
-
-                    {/* Tags */}
-                    {agent.tags && agent.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {agent.tags.map((t, idx) => (
-                          <span
-                            key={idx}
-                            className="px-2 py-0.5 rounded-md text-[10px] font-heading font-semibold bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-800"
-                          >
-                            {t}
-                          </span>
-                        ))}
+                      {/* Simplified Description: O Que Faz */}
+                      <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800/80 space-y-1">
+                        <span className="font-heading font-bold text-[10px] uppercase tracking-wider text-cyan-700 dark:text-cyan-400 block">
+                          O Que Este Agente Faz:
+                        </span>
+                        <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                          {agent.whatItDoes || agent.content.slice(0, 160)}
+                        </p>
                       </div>
-                    )}
-                  </div>
 
-                  {/* Actions Footer */}
-                  <div className="pt-4 border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between gap-2">
-                    <button
-                      onClick={() => setPreviewAgent(agent)}
-                      className="text-xs font-heading font-bold text-slate-600 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5" strokeWidth={2} />
-                      Ver Markdown
-                    </button>
+                      {/* When to Use: Quando Chamar */}
+                      <div className="p-3.5 rounded-2xl bg-slate-50/60 dark:bg-slate-950/50 border border-slate-200/80 dark:border-slate-800/60 space-y-1">
+                        <span className="font-heading font-bold text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-400 block">
+                          Quando Chamar no Chat:
+                        </span>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                          {agent.whenToUse ||
+                            'Invoque no chat quando precisar de auxilio especializado.'}
+                        </p>
+                      </div>
 
-                    <div className="flex items-center gap-2">
+                      {/* Tags */}
+                      {agent.tags && agent.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {agent.tags.map((t, idx) => (
+                            <span
+                              key={idx}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-heading font-semibold bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-800"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions Footer */}
+                    <div className="pt-4 border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between gap-2">
                       <button
-                        onClick={() => downloadMd(agent)}
-                        className="p-2 rounded-full bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
-                        title="Baixar arquivo .md"
+                        onClick={() => setPreviewAgent(agent)}
+                        className="text-xs font-heading font-bold text-slate-600 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 flex items-center gap-1.5 transition-colors cursor-pointer"
                       >
-                        <Download className="w-3.5 h-3.5" strokeWidth={2} />
+                        <Eye className="w-3.5 h-3.5" strokeWidth={2} />
+                        Ver Markdown
                       </button>
 
-                      <GlassCapsuleButton
-                        variant="cyan"
-                        size="sm"
-                        onClick={() => copyToClipboard(agent.chatCommand, agent.name)}
-                        icon={
-                          copiedId === agent.name ? (
-                            <Check className="w-3.5 h-3.5 text-white" strokeWidth={2.2} />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" strokeWidth={2} />
-                          )
-                        }
-                      >
-                        {copiedId === agent.name ? 'Copiado' : agent.chatCommand}
-                      </GlassCapsuleButton>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => downloadMd(agent)}
+                          className="p-2 rounded-full bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
+                          title="Baixar arquivo .md"
+                        >
+                          <Download className="w-3.5 h-3.5" strokeWidth={2} />
+                        </button>
+
+                        <GlassCapsuleButton
+                          variant="cyan"
+                          size="sm"
+                          onClick={() => copyToClipboard(agent.chatCommand, agent.name)}
+                          icon={
+                            copiedId === agent.name ? (
+                              <Check className="w-3.5 h-3.5 text-white" strokeWidth={2.2} />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" strokeWidth={2} />
+                            )
+                          }
+                        >
+                          {copiedId === agent.name ? 'Copiado' : agent.chatCommand}
+                        </GlassCapsuleButton>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
@@ -824,7 +1113,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* NEON DATABASE MODAL */}
+      {/* NEON DATABASE DIAGNOSTIC & SYNC MODAL */}
       {showNeonModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="glow-card max-w-2xl w-full p-6 sm:p-8 space-y-6 shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar">
@@ -835,9 +1124,11 @@ export default function HomePage() {
                 </div>
                 <div>
                   <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
-                    Conexão Neon PostgreSQL (agents_mpg)
+                    Diagnostico Neon PostgreSQL (agents_mpg)
                   </h3>
-                  <span className="text-xs text-slate-500">Persistência contínua na nuvem</span>
+                  <span className="text-xs text-slate-500">
+                    Inspecao em tempo real da conexao, tabela e registros
+                  </span>
                 </div>
               </div>
               <button
@@ -849,46 +1140,118 @@ export default function HomePage() {
             </div>
 
             {/* Live Status Card */}
-            <div className={`p-4 rounded-2xl border text-xs space-y-2 ${
-              dbConnected
-                ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-800 dark:text-emerald-200'
-                : 'bg-amber-500/10 border-amber-500/25 text-amber-800 dark:text-amber-200'
-            }`}>
-              <div className="flex items-center justify-between">
+            <div
+              className={`p-4 rounded-2xl border text-xs space-y-3 ${
+                dbConnected
+                  ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-900 dark:text-emerald-200'
+                  : hasDbError
+                  ? 'bg-red-500/10 border-red-500/30 text-red-900 dark:text-red-200'
+                  : 'bg-amber-500/10 border-amber-500/25 text-amber-900 dark:text-amber-200'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 font-heading font-bold text-sm">
                   {dbConnected ? (
                     <>
                       <CheckCircle2 className="w-4 h-4 text-emerald-500" strokeWidth={2} />
                       Conectado ao Neon PostgreSQL
                     </>
+                  ) : hasDbError ? (
+                    <>
+                      <AlertTriangle className="w-4 h-4 text-red-500" strokeWidth={2} />
+                      Variavel Detectada, porem Falha na Conexao SQL
+                    </>
                   ) : (
                     <>
                       <Database className="w-4 h-4 text-amber-500" strokeWidth={2} />
-                      Modo Fallback Ativo (DATABASE_URL não configurada)
+                      Variavel DATABASE_URL Nao Encontrada neste Deploy
                     </>
                   )}
                 </div>
-                <button
-                  onClick={checkNeonStatus}
-                  disabled={isCheckingDb}
-                  className="px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-[11px] font-heading font-bold flex items-center gap-1.5 hover:border-cyan-500 transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
-                >
-                  <RefreshCw className={`w-3 h-3 ${isCheckingDb ? 'animate-spin' : ''}`} strokeWidth={2} />
-                  {isCheckingDb ? 'Testando...' : 'Testar Conexão'}
-                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => checkNeonStatus(false)}
+                    disabled={isCheckingDb || isSyncingDb}
+                    className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-[11px] font-heading font-bold flex items-center gap-1.5 hover:border-cyan-500 transition-colors cursor-pointer text-slate-800 dark:text-slate-200"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3 ${isCheckingDb ? 'animate-spin' : ''}`}
+                      strokeWidth={2}
+                    />
+                    {isCheckingDb ? 'Testando...' : 'Testar Conexao'}
+                  </button>
+
+                  <button
+                    onClick={handleForceInitAndSync}
+                    disabled={isSyncingDb || isCheckingDb}
+                    className="px-3 py-1.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-heading font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    <Database
+                      className={`w-3 h-3 ${isSyncingDb ? 'animate-pulse' : ''}`}
+                      strokeWidth={2}
+                    />
+                    {isSyncingDb ? 'Sincronizando...' : 'Criar Tabela & Sincronizar'}
+                  </button>
+                </div>
               </div>
-              {dbDetails?.message && (
-                <p className="text-xs opacity-90">{dbDetails.message}</p>
+
+              {dbDetails?.message && <p className="text-xs opacity-90">{dbDetails.message}</p>}
+
+              {dbDetails?.error && (
+                <div className="p-3 rounded-xl bg-red-950/40 border border-red-500/40 font-mono text-[11px] text-red-200 break-all">
+                  <strong>Detalhe Tecnico do Erro:</strong> {dbDetails.error}
+                </div>
               )}
-              {dbDetails?.agentCount !== undefined && (
-                <p className="text-[11px] font-mono">Agentes salvos no banco Neon: {dbDetails.agentCount}</p>
+
+              {/* Live Telemetry Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-[11px]">
+                <div className="p-2.5 rounded-xl bg-white/60 dark:bg-slate-950/60 border border-slate-200/60 dark:border-slate-800/80">
+                  <span className="block text-[10px] uppercase font-sans font-bold opacity-70">
+                    Variavel Lida
+                  </span>
+                  <span className="font-bold">{dbDetails?.envVarName || 'Nenhuma'}</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-white/60 dark:bg-slate-950/60 border border-slate-200/60 dark:border-slate-800/80">
+                  <span className="block text-[10px] uppercase font-sans font-bold opacity-70">
+                    Database Alvo
+                  </span>
+                  <span className="font-bold">{dbDetails?.databaseName || '—'}</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-white/60 dark:bg-slate-950/60 border border-slate-200/60 dark:border-slate-800/80">
+                  <span className="block text-[10px] uppercase font-sans font-bold opacity-70">
+                    Tabela agents
+                  </span>
+                  <span className="font-bold">
+                    {dbDetails?.tableExists ? 'Criada (OK)' : 'Nao verificada'}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-white/60 dark:bg-slate-950/60 border border-slate-200/60 dark:border-slate-800/80">
+                  <span className="block text-[10px] uppercase font-sans font-bold opacity-70">
+                    Linhas no Neon
+                  </span>
+                  <span className="font-bold">{dbDetails?.agentCount ?? 0}</span>
+                </div>
+              </div>
+              {dbDetails?.host && (
+                <p className="text-[11px] font-mono opacity-80">Host conectado: {dbDetails.host}</p>
               )}
+            </div>
+
+            {/* Important Note about Neon Database Dropdown vs Project Name */}
+            <div className="p-3.5 rounded-2xl bg-cyan-500/10 border border-cyan-500/25 text-xs text-slate-700 dark:text-slate-300 space-y-1">
+              <span className="font-heading font-bold text-cyan-700 dark:text-cyan-400 block">
+                Dica Importante ao Conferir a Tabela no Painel da Neon:
+              </span>
+              <p className="leading-relaxed">
+                No Neon, o <strong>Projeto</strong> chama-se <code className="font-mono font-bold">agents_mpg</code>, mas o nome padrao do <strong>Database</strong> dentro dele geralmente e <code className="font-mono font-bold">neondb</code> (veja o campo <strong>Database Alvo</strong> acima). Na aba <strong>Tables</strong> da Neon, selecione exatamente esse Database e a branch <code className="font-mono">main</code> para visualizar a tabela <code className="font-mono font-bold">agents</code>.
+              </p>
             </div>
 
             {/* Step-by-Step Instructions */}
             <div className="space-y-4 text-xs text-slate-700 dark:text-slate-300">
               <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
-                Como Ativar no Vercel em 3 Passos:
+                Como Ativar ou Corrigir na Vercel em 3 Passos:
               </h4>
 
               <div className="space-y-3">
@@ -897,31 +1260,25 @@ export default function HomePage() {
                     1. Copie a Connection String no Neon
                   </span>
                   <p className="text-slate-600 dark:text-slate-400">
-                    Acesse seu painel no Neon, abra o projeto <strong className="text-slate-800 dark:text-white">agents_mpg</strong> e copie a URL de conexão (formato <code className="font-mono text-cyan-600 dark:text-cyan-300">postgresql://...</code>).
+                    Abra o projeto <strong className="text-slate-800 dark:text-white">agents_mpg</strong> no Neon, clique em <strong>Connect</strong> e copie a URL <code className="font-mono text-cyan-600 dark:text-cyan-300">postgresql://...</code> (mesmo que venha com <code className="font-mono">psql &apos;...&apos;</code>, o Hub limpa automaticamente).
                   </p>
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
                   <span className="font-heading font-bold text-cyan-600 dark:text-cyan-400 block">
-                    2. Adicione na Vercel
+                    2. Salve em Environment Variables na Vercel
                   </span>
                   <p className="text-slate-600 dark:text-slate-400">
-                    Na Vercel, acesse: <strong className="text-slate-800 dark:text-white">Seu Projeto &gt; Settings &gt; Environment Variables</strong>.
-                  </p>
-                  <p className="text-slate-600 dark:text-slate-400">
-                    Nome da variável: <code className="font-mono font-bold text-emerald-600 dark:text-emerald-400">DATABASE_URL</code>
-                  </p>
-                  <p className="text-slate-600 dark:text-slate-400">
-                    Valor: cole a Connection String copiada do Neon.
+                    Acesse <strong className="text-slate-800 dark:text-white">Seu Projeto na Vercel &gt; Settings &gt; Environment Variables</strong> e adicione <code className="font-mono font-bold text-emerald-600 dark:text-emerald-400">DATABASE_URL</code> (ou conecte via aba <strong>Storage</strong> — variaveis como <code className="font-mono">AGENTS_MPG_DATABASE_URL</code> tambem sao reconhecidas automaticamente).
                   </p>
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1">
                   <span className="font-heading font-bold text-cyan-600 dark:text-cyan-400 block">
-                    3. Redeploy
+                    3. Faca Redeploy e Clique em &quot;Criar Tabela &amp; Sincronizar&quot;
                   </span>
                   <p className="text-slate-600 dark:text-slate-400">
-                    Clique em <strong className="text-slate-800 dark:text-white">Redeploy</strong> na Vercel. A aplicação criará a tabela automaticamente e salvará todos os seus agentes no Neon!
+                    Variaveis adicionadas na Vercel so entram em vigor apos um <strong className="text-slate-800 dark:text-white">Redeploy</strong> (aba Deployments &gt; Redeploy). Assim que o deploy concluir, abra esta janela e clique em <strong>Criar Tabela &amp; Sincronizar</strong>.
                   </p>
                 </div>
               </div>
@@ -933,7 +1290,7 @@ export default function HomePage() {
                 size="md"
                 onClick={() => setShowNeonModal(false)}
               >
-                Entendi, Fechar
+                Fechar Diagnostico
               </GlassCapsuleButton>
             </div>
           </div>
@@ -953,7 +1310,7 @@ export default function HomePage() {
                   <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
                     Como Usar no Chat do Antigravity
                   </h3>
-                  <span className="text-xs text-slate-500">Invocação nativa em qualquer projeto</span>
+                  <span className="text-xs text-slate-500">Invocacao nativa em qualquer projeto</span>
                 </div>
               </div>
               <button
@@ -965,68 +1322,12 @@ export default function HomePage() {
             </div>
 
             <div className="space-y-4 text-xs text-slate-700 dark:text-slate-300">
-              {/* Option 1: Slash Command */}
               <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-heading font-bold bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20 uppercase">
-                    Método 1 (Recomendado)
-                  </span>
-                  <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
-                    Comando de Barra Imediato
-                  </h4>
-                </div>
+                <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
+                  Conexao Oficial via Servidor MCP
+                </h4>
                 <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Em qualquer conversa do Antigravity, basta digitar a barra seguida do nome do agente:
-                </p>
-                <div className="flex flex-wrap gap-2 pt-1 font-mono font-bold">
-                  <span className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-900 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30">
-                    /designer-arvoredo-master
-                  </span>
-                  <span className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-900 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30">
-                    /code-reviewer
-                  </span>
-                  <span className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-900 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30">
-                    /cloud-architect
-                  </span>
-                </div>
-              </div>
-
-              {/* Option 2: Natural Language */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-heading font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 uppercase">
-                    Método 2
-                  </span>
-                  <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
-                    Linguagem Natural no Chat
-                  </h4>
-                </div>
-                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Você também pode falar normalmente com o Antigravity:
-                </p>
-                <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 italic font-mono text-[11px]">
-                  &quot;Antigravity, atue como o Designer Arvoredo Master para construir a tela de login&quot;
-                </div>
-              </div>
-
-              {/* Option 3: Auto Sync */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-heading font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 uppercase">
-                    Método 3
-                  </span>
-                  <h4 className="font-heading font-bold text-sm text-slate-900 dark:text-white">
-                    Sincronizar Novos Agentes Salvos
-                  </h4>
-                </div>
-                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Quando você subir um novo agente aqui no Hub ou importar do GitHub, basta pedir no chat:
-                </p>
-                <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 italic font-mono text-[11px]">
-                  &quot;Antigravity, instale meus novos agentes salvos no hub&quot;
-                </div>
-                <p className="text-slate-500 text-[11px]">
-                  Os arquivos ficam salvos em seu diretório de configuração persistente, prontos para uso em qualquer workspace.
+                  Conecte o Antigravity Hub como servidor MCP para listar, ler e salvar agentes diretamente da conversa.
                 </p>
               </div>
             </div>
@@ -1057,7 +1358,7 @@ export default function HomePage() {
                   <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
                     Conectar ao Antigravity via MCP
                   </h3>
-                  <span className="text-xs text-slate-500">Padrão Model Context Protocol oficial</span>
+                  <span className="text-xs text-slate-500">Padrao Model Context Protocol oficial</span>
                 </div>
               </div>
               <button
@@ -1070,7 +1371,7 @@ export default function HomePage() {
 
             <div className="space-y-4 text-xs text-slate-700 dark:text-slate-300">
               <p className="leading-relaxed">
-                Ao instalar o Hub como servidor MCP, a IA do Antigravity ganha <strong>ferramentas nativas</strong> no chat para listar seus agentes, puxar instruções <code className="font-mono text-cyan-600 dark:text-cyan-400 font-bold">.md</code>, salvar agentes no Neon e importar do GitHub com auditoria de licença.
+                Ao instalar o Hub como servidor MCP, a IA do Antigravity ganha <strong>ferramentas nativas</strong> no chat para listar seus agentes, puxar instrucoes <code className="font-mono text-cyan-600 dark:text-cyan-400 font-bold">.md</code>, salvar agentes no Neon e importar do GitHub com auditoria de licenca.
               </p>
 
               {/* SECTION: CONFIG SNIPPET */}
@@ -1078,21 +1379,25 @@ export default function HomePage() {
                 <div className="flex items-center justify-between">
                   <span className="font-heading font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
                     <FileText className="w-4 h-4 text-cyan-500" strokeWidth={2} />
-                    Configuração em .agents/mcp.json (ou Claude Desktop / Cursor):
+                    Configuracao em mcp_config.json (Manage MCP Servers &gt; View raw config):
                   </span>
                   <button
                     onClick={() => {
-                      const snippet = JSON.stringify({
-                        mcpServers: {
-                          "antigravity-hub": {
-                            command: "node",
-                            args: ["/home/antigravity/antigravity-hub/dist/mcp-server/index.js"],
-                            env: {
-                              DATABASE_URL: "sua-connection-string-do-neon"
-                            }
-                          }
-                        }
-                      }, null, 2);
+                      const snippet = JSON.stringify(
+                        {
+                          mcpServers: {
+                            'antigravity-hub': {
+                              command: 'node',
+                              args: ['/caminho/para/antigravity-hub/dist/mcp-server/index.js'],
+                              env: {
+                                DATABASE_URL: 'sua-connection-string-do-neon',
+                              },
+                            },
+                          },
+                        },
+                        null,
+                        2
+                      );
                       copyToClipboard(snippet, 'mcp-json');
                     }}
                     className="text-[11px] font-heading font-bold text-cyan-600 dark:text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
@@ -1106,7 +1411,7 @@ export default function HomePage() {
   "mcpServers": {
     "antigravity-hub": {
       "command": "node",
-      "args": ["/home/antigravity/antigravity-hub/dist/mcp-server/index.js"],
+      "args": ["/caminho/para/antigravity-hub/dist/mcp-server/index.js"],
       "env": {
         "DATABASE_URL": "sua-connection-string-do-neon"
       }
@@ -1120,10 +1425,12 @@ export default function HomePage() {
               <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-heading font-bold text-slate-900 dark:text-white">
-                    Instalação em 1 Comando no Terminal:
+                    Instalacao em 1 Comando no Terminal:
                   </span>
                   <button
-                    onClick={() => copyToClipboard('node dist/cli/index.js mcp install --global', 'cli-cmd')}
+                    onClick={() =>
+                      copyToClipboard('node dist/cli/index.js mcp install --global', 'cli-cmd')
+                    }
                     className="text-[11px] font-heading font-bold text-cyan-600 dark:text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
                   >
                     <Copy className="w-3 h-3" strokeWidth={2} />
@@ -1134,7 +1441,8 @@ export default function HomePage() {
                   node dist/cli/index.js mcp install --global
                 </div>
                 <p className="text-[11px] text-slate-500">
-                  Grava automaticamente em <code className="font-mono">.agents/mcp.json</code> e em <code className="font-mono">~/.gemini/config/mcp.json</code>.
+                  Grava automaticamente em <code className="font-mono">.agents/mcp.json</code> e em{' '}
+                  <code className="font-mono">~/.gemini/config/mcp.json</code>.
                 </p>
               </div>
 
@@ -1145,20 +1453,36 @@ export default function HomePage() {
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">list_agents</span>
-                    <span className="text-slate-500">Lista todos os agentes salvos no Hub com resumo.</span>
+                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">
+                      list_agents
+                    </span>
+                    <span className="text-slate-500">
+                      Lista todos os agentes salvos no Hub com resumo.
+                    </span>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">get_agent</span>
-                    <span className="text-slate-500">Obtém as instruções .md completas do agente.</span>
+                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">
+                      get_agent
+                    </span>
+                    <span className="text-slate-500">
+                      Obtem as instrucoes .md completas do agente.
+                    </span>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">save_agent</span>
-                    <span className="text-slate-500">Salva novos agentes no Neon DB direto pelo chat.</span>
+                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">
+                      save_agent
+                    </span>
+                    <span className="text-slate-500">
+                      Salva novos agentes no Neon DB direto pelo chat.
+                    </span>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">import_agent_github</span>
-                    <span className="text-slate-500">Audita (só MIT/Apache-2.0) e importa do GitHub.</span>
+                    <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400 block">
+                      import_agent_github
+                    </span>
+                    <span className="text-slate-500">
+                      Audita (so MIT/Apache-2.0) e importa do GitHub.
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1166,10 +1490,10 @@ export default function HomePage() {
               {/* SECTION: HTTP ENDPOINT */}
               <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-900 dark:text-indigo-200 space-y-1">
                 <span className="font-heading font-bold block">
-                  Conexão Remota na Nuvem (Vercel):
+                  Conexao Remota na Nuvem (Vercel):
                 </span>
                 <p className="text-[11px] opacity-90">
-                  Você também pode apontar qualquer cliente MCP para o endpoint HTTP da Vercel:
+                  Voce tambem pode apontar qualquer cliente MCP para o endpoint HTTP da Vercel:
                 </p>
                 <code className="block p-2 rounded-lg bg-slate-900 text-indigo-300 font-mono text-[11px] break-all">
                   https://[seu-projeto].vercel.app/api/mcp

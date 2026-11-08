@@ -2,7 +2,13 @@ import { NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getDb, initDb } from '@/lib/db';
+import { neon } from '@neondatabase/serverless';
+import {
+  initDb,
+  parseAgentDetails,
+  resolveDatabaseEnv,
+  upsertAgentInDb,
+} from '@/lib/db';
 import { LicenseVerifier } from '@/license/verifier';
 
 function getAgentsDir(): string {
@@ -21,119 +27,92 @@ function getAgentsDir(): string {
   }
 }
 
-function parseAgentDetails(content: string, name: string) {
-  const titleMatch = content.match(/^#+\s*(.+)$/m);
-  const title = titleMatch ? titleMatch[1].replace(/\(`.*`\)/, '').trim() : name;
-
-  const whatMatch = content.match(/##\s*O Que Este Agente Faz\s*([\s\S]*?)(?=\n##|$)/i);
-  let whatItDoes = '';
-  if (whatMatch) {
-    whatItDoes = whatMatch[1].trim();
-  } else {
-    const fmDesc = content.match(/description:\s*(.+)/i);
-    if (fmDesc) {
-      whatItDoes = fmDesc[1].trim();
-    } else {
-      const pMatch = content.match(/^#+.*\n+([^#\n]+)/m);
-      whatItDoes = pMatch ? pMatch[1].trim() : 'Agente especializado pronto para execução de tarefas no chat.';
-    }
-  }
-
-  const whenMatch = content.match(/##\s*Quando Usar\s*([\s\S]*?)(?=\n##|$)/i);
-  const whenToUse = whenMatch
-    ? whenMatch[1].trim()
-    : 'Invoque no chat quando precisar de auxílio especializado nesta área.';
-
-  return { title, whatItDoes, whenToUse };
-}
-
 async function fetchAllAgents() {
-  const sql = getDb();
-  if (sql) {
-    try {
-      await initDb();
-      const rows = await sql`
-        SELECT name, title, content, file_name, source_url, license, created_at, updated_at
-        FROM agents
-        ORDER BY id DESC;
-      `;
+  const resolved = resolveDatabaseEnv();
+  if (resolved) {
+    await initDb();
+    const sql = neon(resolved.connectionString);
+    const rows = await sql`
+      SELECT name, title, content, file_name, source_url, license, created_at, updated_at
+      FROM agents
+      ORDER BY id DESC;
+    `;
 
-      return (rows || []).map((r) => {
-        const details = parseAgentDetails(r.content, r.name);
-        return {
-          name: r.name,
-          fileName: r.file_name,
-          title: r.title || details.title,
-          whatItDoes: details.whatItDoes,
-          whenToUse: details.whenToUse,
-          content: r.content,
-          sourceUrl: r.source_url || undefined,
-          license: r.license || 'Proprietária / Pessoal',
-          storage: 'Neon PostgreSQL (agents_mpg)',
-        };
-      });
-    } catch {
-      // ignore
-    }
+    return (rows || []).map((r) => {
+      const details = parseAgentDetails(String(r.content), String(r.name));
+      return {
+        name: String(r.name),
+        fileName: String(r.file_name),
+        title: String(r.title || details.title),
+        whatItDoes: details.whatItDoes,
+        whenToUse: details.whenToUse,
+        content: String(r.content),
+        sourceUrl: r.source_url ? String(r.source_url) : undefined,
+        license: r.license ? String(r.license) : 'Proprietaria / Pessoal',
+        storage: `Neon PostgreSQL (${resolved.databaseName})`,
+      };
+    });
   }
 
   try {
     const dir = getAgentsDir();
     if (!fs.existsSync(dir)) return [];
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
-    return files.map((fileName) => {
-      try {
-        const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
-        const content = fs.readFileSync(/*turbopackIgnore: true*/ filePath, 'utf-8');
-        const name = fileName.replace(/\.md$/, '');
-        const details = parseAgentDetails(content, name);
-        return {
-          name,
-          fileName,
-          title: details.title,
-          whatItDoes: details.whatItDoes,
-          whenToUse: details.whenToUse,
-          content,
-          storage: 'Arquivo Local',
-        };
-      } catch {
-        return null;
-      }
-    }).filter(Boolean);
+    return files
+      .map((fileName) => {
+        try {
+          const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
+          const content = fs.readFileSync(/*turbopackIgnore: true*/ filePath, 'utf-8');
+          const name = fileName.replace(/\.md$/, '');
+          const details = parseAgentDetails(content, name);
+          return {
+            name,
+            fileName,
+            title: details.title,
+            whatItDoes: details.whatItDoes,
+            whenToUse: details.whenToUse,
+            content,
+            storage: 'Arquivo Local',
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
   } catch {
     return [];
   }
 }
 
 async function fetchAgentByName(name: string) {
-  const cleanName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-|-$/g, '');
-  const sql = getDb();
+  const cleanName = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/^-|-$/g, '');
+  const resolved = resolveDatabaseEnv();
 
-  if (sql) {
-    try {
-      await initDb();
-      const rows = await sql`
-        SELECT name, title, content, file_name, source_url, license
-        FROM agents
-        WHERE name = ${cleanName}
-        LIMIT 1;
-      `;
-      if (rows && rows.length > 0) {
-        const r = rows[0];
-        const details = parseAgentDetails(r.content, r.name);
-        return {
-          name: r.name,
-          fileName: r.file_name,
-          title: r.title || details.title,
-          whatItDoes: details.whatItDoes,
-          whenToUse: details.whenToUse,
-          content: r.content,
-          license: r.license,
-          storage: 'Neon PostgreSQL',
-        };
-      }
-    } catch {
-      // ignore
+  if (resolved) {
+    await initDb();
+    const sql = neon(resolved.connectionString);
+    const rows = await sql`
+      SELECT name, title, content, file_name, source_url, license
+      FROM agents
+      WHERE name = ${cleanName}
+      LIMIT 1;
+    `;
+    if (rows && rows.length > 0) {
+      const r = rows[0];
+      const details = parseAgentDetails(String(r.content), String(r.name));
+      return {
+        name: String(r.name),
+        fileName: String(r.file_name),
+        title: String(r.title || details.title),
+        whatItDoes: details.whatItDoes,
+        whenToUse: details.whenToUse,
+        content: String(r.content),
+        license: r.license ? String(r.license) : undefined,
+        storage: `Neon PostgreSQL (${resolved.databaseName})`,
+      };
     }
   }
 
@@ -160,33 +139,35 @@ async function fetchAgentByName(name: string) {
   return null;
 }
 
-async function persistAgent(name: string, content: string, title?: string, license?: string, sourceUrl?: string) {
-  const cleanName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-|-$/g, '') || 'custom-agent';
+async function persistAgent(
+  name: string,
+  content: string,
+  title?: string,
+  license?: string,
+  sourceUrl?: string
+) {
+  const cleanName =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-')
+      .replace(/^-|-$/g, '') || 'custom-agent';
   const fileName = `${cleanName}.md`;
   const details = parseAgentDetails(content, cleanName);
   const finalTitle = title || details.title;
 
-  const sql = getDb();
+  const resolved = resolveDatabaseEnv();
   let savedInNeon = false;
 
-  if (sql) {
-    try {
-      await initDb();
-      await sql`
-        INSERT INTO agents (name, title, content, file_name, source_url, license, updated_at)
-        VALUES (${cleanName}, ${finalTitle}, ${content}, ${fileName}, ${sourceUrl || null}, ${license || null}, CURRENT_TIMESTAMP)
-        ON CONFLICT (name) DO UPDATE SET
-          title = EXCLUDED.title,
-          content = EXCLUDED.content,
-          file_name = EXCLUDED.file_name,
-          source_url = EXCLUDED.source_url,
-          license = EXCLUDED.license,
-          updated_at = CURRENT_TIMESTAMP;
-      `;
-      savedInNeon = true;
-    } catch (err) {
-      console.warn('[MCP Route] Erro ao gravar no Neon:', err);
-    }
+  if (resolved) {
+    await upsertAgentInDb({
+      name: cleanName,
+      title: finalTitle,
+      content,
+      fileName,
+      sourceUrl: sourceUrl || null,
+      license: license || null,
+    });
+    savedInNeon = true;
   }
 
   try {
@@ -200,21 +181,21 @@ async function persistAgent(name: string, content: string, title?: string, licen
     name: cleanName,
     fileName,
     title: finalTitle,
-    savedIn: savedInNeon ? 'Neon PostgreSQL (agents_mpg)' : 'Local File',
+    savedInNeon,
+    savedIn: savedInNeon
+      ? `Neon PostgreSQL (${resolved!.databaseName})`
+      : 'Arquivo Local (DATABASE_URL nao configurada)',
   };
 }
 
 async function removeAgent(name: string) {
   const cleanName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-  const sql = getDb();
+  const resolved = resolveDatabaseEnv();
 
-  if (sql) {
-    try {
-      await initDb();
-      await sql`DELETE FROM agents WHERE name = ${cleanName};`;
-    } catch {
-      // ignore
-    }
+  if (resolved) {
+    await initDb();
+    const sql = neon(resolved.connectionString);
+    await sql`DELETE FROM agents WHERE name = ${cleanName};`;
   }
 
   try {
@@ -237,7 +218,8 @@ export async function GET() {
     name: 'antigravity-hub',
     version: '1.0.0',
     protocolVersion: '2024-11-05',
-    description: 'Servidor MCP Oficial do Antigravity Hub para gerenciamento e invocação de agentes em chat',
+    description:
+      'Servidor MCP Oficial do Antigravity Hub para gerenciamento e invocacao de agentes em chat',
     capabilities: {
       tools: {
         listChanged: false,
@@ -253,7 +235,8 @@ export async function GET() {
     tools: [
       {
         name: 'list_agents',
-        description: 'Lista todos os agentes disponíveis no Antigravity Hub com nomes, títulos, resumos de atuação e tags.',
+        description:
+          'Lista todos os agentes disponiveis no Antigravity Hub com nomes, titulos, resumos de atuacao e tags.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -266,7 +249,8 @@ export async function GET() {
       },
       {
         name: 'get_agent',
-        description: 'Obtém as diretrizes, persona e instruções completas em markdown (.md) de um agente específico para executar uma tarefa.',
+        description:
+          'Obtem as diretrizes, persona e instrucoes completas em markdown (.md) de um agente especifico para executar uma tarefa.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -280,25 +264,26 @@ export async function GET() {
       },
       {
         name: 'save_agent',
-        description: 'Salva um novo agente em formato markdown (.md) no Antigravity Hub (persistido no Neon PostgreSQL).',
+        description:
+          'Salva um novo agente em formato markdown (.md) no Antigravity Hub (persistido no Neon PostgreSQL).',
         inputSchema: {
           type: 'object',
           properties: {
             name: {
               type: 'string',
-              description: 'Identificador do agente em minúsculas (kebab-case)',
+              description: 'Identificador do agente em minusculas (kebab-case)',
             },
             content: {
               type: 'string',
-              description: 'Conteúdo markdown (.md) completo das instruções do agente',
+              description: 'Conteudo markdown (.md) completo das instrucoes do agente',
             },
             title: {
               type: 'string',
-              description: 'Título legível do agente (opcional)',
+              description: 'Titulo legivel do agente (opcional)',
             },
             license: {
               type: 'string',
-              description: 'Licença do agente (opcional, padrão MIT)',
+              description: 'Licenca do agente (opcional, padrao MIT)',
             },
           },
           required: ['name', 'content'],
@@ -306,13 +291,14 @@ export async function GET() {
       },
       {
         name: 'import_agent_github',
-        description: 'Audita licença (apenas MIT ou Apache-2.0, 0% risco legal) e importa agente do GitHub.',
+        description:
+          'Audita licenca (apenas MIT ou Apache-2.0, 0% risco legal) e importa agente do GitHub.',
         inputSchema: {
           type: 'object',
           properties: {
             url: {
               type: 'string',
-              description: 'URL do repositório no GitHub (ex: https://github.com/owner/repo)',
+              description: 'URL do repositorio no GitHub (ex: https://github.com/owner/repo)',
             },
           },
           required: ['url'],
@@ -341,7 +327,6 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { id = 1, method, params } = body;
 
-    // Handle MCP protocol methods
     switch (method) {
       case 'initialize': {
         return NextResponse.json({
@@ -380,7 +365,7 @@ export async function POST(request: Request) {
         if (toolName === 'list_agents') {
           let list = await fetchAllAgents();
           if (args.search) {
-            const q = args.search.toLowerCase();
+            const q = String(args.search).toLowerCase();
             list = list.filter(
               (a: any) =>
                 a.name.toLowerCase().includes(q) ||
@@ -399,31 +384,35 @@ export async function POST(request: Request) {
             });
           }
 
-          const summary = list.map((a: any) => {
-            return `• **${a.title}** (\`${a.name}\`)\n  - O que faz: ${a.whatItDoes}\n  - Quando usar: ${a.whenToUse}\n  - Armazenamento: ${a.storage}`;
-          }).join('\n\n');
+          const summary = list
+            .map((a: any) => {
+              return `- **${a.title}** (\`${a.name}\`)\n  - O que faz: ${a.whatItDoes}\n  - Quando usar: ${a.whenToUse}\n  - Armazenamento: ${a.storage}`;
+            })
+            .join('\n\n');
 
           return NextResponse.json({
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{
-                type: 'text',
-                text: `### Agentes no Antigravity Hub (${list.length} disponíveis):\n\n${summary}\n\nUse \`get_agent\` com o nome para obter as instruções completas.`,
-              }],
+              content: [
+                {
+                  type: 'text',
+                  text: `### Agentes no Antigravity Hub (${list.length} disponiveis):\n\n${summary}\n\nUse \`get_agent\` com o nome para obter as instrucoes completas.`,
+                },
+              ],
             },
           });
         }
 
         if (toolName === 'get_agent') {
-          const agent = await fetchAgentByName(args.name);
+          const agent = await fetchAgentByName(String(args.name || ''));
           if (!agent) {
             return NextResponse.json({
               jsonrpc: '2.0',
               id,
               result: {
                 isError: true,
-                content: [{ type: 'text', text: `Agente '${args.name}' não encontrado no Hub.` }],
+                content: [{ type: 'text', text: `Agente '${args.name}' nao encontrado no Hub.` }],
               },
             });
           }
@@ -432,38 +421,49 @@ export async function POST(request: Request) {
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{
-                type: 'text',
-                text: `# Instruções do Agente: ${agent.title} (\`${agent.name}\`)\nArmazenamento: ${agent.storage}\n\n${agent.content}`,
-              }],
+              content: [
+                {
+                  type: 'text',
+                  text: `# Instrucoes do Agente: ${agent.title} (\`${agent.name}\`)\nArmazenamento: ${agent.storage}\n\n${agent.content}`,
+                },
+              ],
             },
           });
         }
 
         if (toolName === 'save_agent') {
-          const saved = await persistAgent(args.name, args.content, args.title, args.license);
+          const saved = await persistAgent(
+            String(args.name || ''),
+            String(args.content || ''),
+            args.title ? String(args.title) : undefined,
+            args.license ? String(args.license) : undefined
+          );
           return NextResponse.json({
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{
-                type: 'text',
-                text: `✅ Agente '${saved.name}' salvo com sucesso!\n- Título: ${saved.title}\n- Armazenamento: ${saved.savedIn}`,
-              }],
+              content: [
+                {
+                  type: 'text',
+                  text: `[OK] Agente '${saved.name}' salvo com sucesso!\n- Titulo: ${saved.title}\n- Armazenamento: ${saved.savedIn}`,
+                },
+              ],
             },
           });
         }
 
         if (toolName === 'import_agent_github') {
-          const cleanUrl = (args.url || '').trim();
-          const match = cleanUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/i) || cleanUrl.match(/^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/);
+          const cleanUrl = String(args.url || '').trim();
+          const match =
+            cleanUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/i) ||
+            cleanUrl.match(/^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/);
           if (!match) {
             return NextResponse.json({
               jsonrpc: '2.0',
               id,
               result: {
                 isError: true,
-                content: [{ type: 'text', text: 'URL do GitHub inválida.' }],
+                content: [{ type: 'text', text: 'URL do GitHub invalida.' }],
               },
             });
           }
@@ -478,7 +478,15 @@ export async function POST(request: Request) {
               id,
               result: {
                 isError: true,
-                content: [{ type: 'text', text: `🛑 BLOQUEADO: ${licenseAudit.error || 'Licença não permitida. Apenas MIT e Apache-2.0 são autorizadas.'}` }],
+                content: [
+                  {
+                    type: 'text',
+                    text: `[BLOQUEADO]: ${
+                      licenseAudit.error ||
+                      'Licenca nao permitida. Apenas MIT e Apache-2.0 sao autorizadas.'
+                    }`,
+                  },
+                ],
               },
             });
           }
@@ -489,7 +497,9 @@ export async function POST(request: Request) {
             for (const cand of candidates) {
               try {
                 const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${cand}`;
-                const res = await fetch(rawUrl, { headers: { 'User-Agent': 'Antigravity-Hub/1.0' } });
+                const res = await fetch(rawUrl, {
+                  headers: { 'User-Agent': 'Antigravity-Hub/1.0' },
+                });
                 if (res.ok) {
                   const text = await res.text();
                   if (text && text.trim().length > 30) {
@@ -510,28 +520,41 @@ export async function POST(request: Request) {
               id,
               result: {
                 isError: true,
-                content: [{ type: 'text', text: `Nenhum arquivo markdown de agente encontrado em ${owner}/${repo}.` }],
+                content: [
+                  {
+                    type: 'text',
+                    text: `Nenhum arquivo markdown de agente encontrado em ${owner}/${repo}.`,
+                  },
+                ],
               },
             });
           }
 
           const agentName = repo.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-          const saved = await persistAgent(agentName, foundContent, undefined, licenseAudit.spdxId || licenseAudit.license, cleanUrl);
+          const saved = await persistAgent(
+            agentName,
+            foundContent,
+            undefined,
+            licenseAudit.spdxId || licenseAudit.license,
+            cleanUrl
+          );
 
           return NextResponse.json({
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{
-                type: 'text',
-                text: `✅ Agente '${saved.name}' importado com sucesso!\n- Licença Auditada: ${licenseAudit.license} (Aprovado MIT/Apache-2.0)\n- Armazenamento: ${saved.savedIn}`,
-              }],
+              content: [
+                {
+                  type: 'text',
+                  text: `[OK] Agente '${saved.name}' importado com sucesso!\n- Licenca Auditada: ${licenseAudit.license} (Aprovado MIT/Apache-2.0)\n- Armazenamento: ${saved.savedIn}`,
+                },
+              ],
             },
           });
         }
 
         if (toolName === 'delete_agent') {
-          const result = await removeAgent(args.name);
+          const result = await removeAgent(String(args.name || ''));
           return NextResponse.json({
             jsonrpc: '2.0',
             id,
@@ -557,18 +580,23 @@ export async function POST(request: Request) {
           id,
           error: {
             code: -32601,
-            message: `Método não suportado: ${method}`,
+            message: `Metodo nao suportado: ${method}`,
           },
         });
       }
     }
   } catch (err) {
-    return NextResponse.json({
-      jsonrpc: '2.0',
-      error: {
-        code: -32603,
-        message: `Erro interno no servidor MCP: ${err instanceof Error ? err.message : String(err)}`,
+    return NextResponse.json(
+      {
+        jsonrpc: '2.0',
+        error: {
+          code: -32603,
+          message: `Erro interno no servidor MCP: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        },
       },
-    }, { status: 500 });
+      { status: 500 }
+    );
   }
 }

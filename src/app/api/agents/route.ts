@@ -2,7 +2,17 @@ import { NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { getDb, initDb } from '@/lib/db';
+import { neon } from '@neondatabase/serverless';
+import {
+  initDb,
+  parseAgentDetails,
+  resolveDatabaseEnv,
+  upsertAgentInDb,
+} from '@/lib/db';
+
+export const dynamic = 'force-dynamic';
+
+export { parseAgentDetails };
 
 function getAgentsDir(): string {
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
@@ -32,64 +42,25 @@ function ensureAgentsDir(): string {
   return dir;
 }
 
-export function parseAgentDetails(content: string, name: string) {
-  // Extract title
-  const titleMatch = content.match(/^#+\s*(.+)$/m);
-  const title = titleMatch ? titleMatch[1].replace(/\(`.*`\)/, '').trim() : name;
-
-  // Extract 'O Que Este Agente Faz'
-  const whatMatch = content.match(/##\s*O Que Este Agente Faz\s*([\s\S]*?)(?=\n##|$)/i);
-  let whatItDoes = '';
-  if (whatMatch) {
-    whatItDoes = whatMatch[1].trim();
-  } else {
-    const fmDesc = content.match(/description:\s*(.+)/i);
-    if (fmDesc) {
-      whatItDoes = fmDesc[1].trim();
-    } else {
-      const pMatch = content.match(/^#+.*\n+([^#\n]+)/m);
-      whatItDoes = pMatch ? pMatch[1].trim() : 'Agente especializado pronto para execução de tarefas no chat.';
-    }
-  }
-
-  // Extract 'Quando Usar'
-  const whenMatch = content.match(/##\s*Quando Usar\s*([\s\S]*?)(?=\n##|$)/i);
-  const whenToUse = whenMatch
-    ? whenMatch[1].trim()
-    : 'Invoque no chat quando precisar de auxílio especializado nesta área.';
-
-  // Specialized tags
-  let tags = ['Agente Markdown'];
-  const lower = name.toLowerCase();
-  if (lower.includes('designer') || lower.includes('akiom')) {
-    tags = ['UI/UX', 'Design System', 'Responsividade', 'Zero Emojis'];
-  } else if (lower.includes('reviewer') || lower.includes('code')) {
-    tags = ['Clean Code', 'Segurança', 'OWASP', 'Qualidade'];
-  } else if (lower.includes('architect') || lower.includes('cloud')) {
-    tags = ['PostgreSQL', 'Neon', 'Microsserviços', 'Arquitetura'];
-  } else if (lower.includes('hub')) {
-    tags = ['Orquestrador', 'GitHub', 'Skills'];
-  }
-
-  return { title, whatItDoes, whenToUse, tags };
-}
-
 export async function GET() {
-  const sql = getDb();
+  const resolved = resolveDatabaseEnv();
+  let dbError: string | undefined;
 
-  // 1. Try Neon Database first
-  if (sql) {
+  // 1. Try Neon Database first when configured
+  if (resolved) {
     try {
       await initDb();
+      const sql = neon(resolved.connectionString);
       const rows = await sql`
-        SELECT name, title, content, file_name, source_url, license, created_at, updated_at
+        SELECT id, name, title, content, file_name, source_url, license, created_at, updated_at
         FROM agents
         ORDER BY id DESC;
       `;
 
       const agents = (rows || []).map((r) => {
-        const details = parseAgentDetails(r.content, r.name);
+        const details = parseAgentDetails(String(r.content), String(r.name));
         return {
+          id: r.id,
           name: r.name,
           fileName: r.file_name,
           title: r.title || details.title,
@@ -104,114 +75,234 @@ export async function GET() {
         };
       });
 
-      return NextResponse.json({ agents, databaseConnected: true });
-    } catch (dbErr) {
-      console.warn('Aviso: Erro ao consultar Neon DB:', dbErr);
+      return NextResponse.json(
+        {
+          agents,
+          databaseConnected: true,
+          databaseConfigured: true,
+          dbMeta: {
+            envVarName: resolved.envVarName,
+            host: resolved.host,
+            databaseName: resolved.databaseName,
+          },
+        },
+        { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+      );
+    } catch (err) {
+      dbError = err instanceof Error ? err.message : String(err);
+      console.error('[GET /api/agents] Erro real ao consultar Neon DB:', dbError);
     }
   }
 
-  // 2. Fallback to local files in agents/
+  // 2. Fallback to local files in agents/ (with databaseConnected strictly false!)
   try {
     const dir = ensureAgentsDir();
-    let agents: any[] = [];
+    let agents: unknown[] = [];
 
     if (fs.existsSync(dir)) {
       const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
-      agents = files.map((fileName) => {
-        try {
-          const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
-          const content = fs.readFileSync(/*turbopackIgnore: true*/ filePath, 'utf-8');
-          const name = fileName.replace(/\.md$/, '');
-          const details = parseAgentDetails(content, name);
+      agents = files
+        .map((fileName) => {
+          try {
+            const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
+            const content = fs.readFileSync(/*turbopackIgnore: true*/ filePath, 'utf-8');
+            const name = fileName.replace(/\.md$/, '');
+            const details = parseAgentDetails(content, name);
 
-          return {
-            name,
-            fileName,
-            title: details.title,
-            whatItDoes: details.whatItDoes,
-            whenToUse: details.whenToUse,
-            tags: details.tags,
-            content,
-            chatCommand: `/${name}`,
-            database: 'Local File',
-          };
-        } catch {
-          return null;
-        }
-      }).filter(Boolean);
+            return {
+              name,
+              fileName,
+              title: details.title,
+              whatItDoes: details.whatItDoes,
+              whenToUse: details.whenToUse,
+              tags: details.tags,
+              content,
+              chatCommand: `/${name}`,
+              database: 'Cache Local',
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
     }
 
-    return NextResponse.json({ agents, databaseConnected: !!sql });
+    return NextResponse.json(
+      {
+        agents,
+        databaseConnected: false,
+        databaseConfigured: Boolean(resolved),
+        dbError,
+        dbMeta: resolved
+          ? {
+              envVarName: resolved.envVarName,
+              host: resolved.host,
+              databaseName: resolved.databaseName,
+            }
+          : undefined,
+      },
+      { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+    );
   } catch {
-    return NextResponse.json({ agents: [], databaseConnected: !!sql });
+    return NextResponse.json(
+      {
+        agents: [],
+        databaseConnected: false,
+        databaseConfigured: Boolean(resolved),
+        dbError,
+      },
+      { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+    );
   }
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
+    const resolved = resolveDatabaseEnv();
+
+    // Suporte a sincronização em lote (ex: agentes que estavam apenas no localStorage do navegador)
+    if (Array.isArray(body.agents)) {
+      if (!resolved) {
+        return NextResponse.json(
+          {
+            error:
+              'Variável de conexão com o Neon (DATABASE_URL) ainda não está configurada neste ambiente.',
+          },
+          { status: 400 }
+        );
+      }
+
+      const syncedAgents = [];
+      for (const item of body.agents) {
+        if (!item?.name || !item?.content) continue;
+        const cleanName =
+          String(item.name)
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]/g, '-')
+            .replace(/^-|-$/g, '') || 'custom-agent';
+        const fileName = `${cleanName}.md`;
+        const details = parseAgentDetails(String(item.content), cleanName);
+
+        const { row } = await upsertAgentInDb({
+          name: cleanName,
+          title: item.title || details.title,
+          content: String(item.content),
+          fileName,
+          sourceUrl: item.sourceUrl || null,
+          license: item.license || null,
+        });
+
+        syncedAgents.push({
+          id: row.id,
+          name: row.name,
+          fileName: row.file_name,
+          title: row.title || details.title,
+          whatItDoes: details.whatItDoes,
+          whenToUse: details.whenToUse,
+          tags: details.tags,
+          chatCommand: `/${row.name}`,
+          content: row.content,
+          sourceUrl: row.source_url,
+          license: row.license,
+          database: 'Neon PostgreSQL',
+        });
+      }
+
+      return NextResponse.json({
+        success: true,
+        savedInNeon: true,
+        syncedCount: syncedAgents.length,
+        agents: syncedAgents,
+      });
+    }
+
     const { name, content, sourceUrl, license } = body;
 
     if (!name || !content) {
-      return NextResponse.json({ error: 'Nome e conteúdo (.md) são obrigatórios' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Nome e conteúdo (.md) são obrigatórios' },
+        { status: 400 }
+      );
     }
 
-    const cleanName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-|-$/g, '') || 'custom-agent';
+    const cleanName =
+      String(name)
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-')
+        .replace(/^-|-$/g, '') || 'custom-agent';
     const fileName = `${cleanName}.md`;
-    const details = parseAgentDetails(content, cleanName);
+    const details = parseAgentDetails(String(content), cleanName);
 
-    const sql = getDb();
     let savedInNeon = false;
+    let dbRowId: number | undefined;
 
-    // 1. Save to Neon PostgreSQL
-    if (sql) {
+    // 1. Se houver variável do Neon configurada, grava obrigatoriamente e propaga qualquer erro real!
+    if (resolved) {
       try {
-        await initDb();
-        await sql`
-          INSERT INTO agents (name, title, content, file_name, source_url, license, updated_at)
-          VALUES (${cleanName}, ${details.title}, ${content}, ${fileName}, ${sourceUrl || null}, ${license || null}, CURRENT_TIMESTAMP)
-          ON CONFLICT (name) DO UPDATE SET
-            title = EXCLUDED.title,
-            content = EXCLUDED.content,
-            file_name = EXCLUDED.file_name,
-            source_url = EXCLUDED.source_url,
-            license = EXCLUDED.license,
-            updated_at = CURRENT_TIMESTAMP;
-        `;
+        const { row } = await upsertAgentInDb({
+          name: cleanName,
+          title: details.title,
+          content: String(content),
+          fileName,
+          sourceUrl: sourceUrl || null,
+          license: license || null,
+        });
         savedInNeon = true;
+        dbRowId = row.id;
       } catch (dbErr) {
-        console.warn('Erro ao salvar no Neon PostgreSQL:', dbErr);
+        const msg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+        console.error('[POST /api/agents] Falha ao gravar no Neon PostgreSQL:', msg);
+        return NextResponse.json(
+          {
+            error: `Falha ao gravar na tabela 'agents' do Neon (${resolved.envVarName} -> ${resolved.host}/${resolved.databaseName}): ${msg}`,
+            dbConfigured: true,
+            savedInNeon: false,
+          },
+          { status: 500 }
+        );
       }
     }
 
-    // 2. Also try writing to local fallback
+    // 2. Também grava em arquivo local quando aplicável (desenvolvimento local)
     try {
       const dir = ensureAgentsDir();
-      const filePath = path.join(dir, fileName);
-      fs.writeFileSync(filePath, content, 'utf-8');
+      const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
+      fs.writeFileSync(/*turbopackIgnore: true*/ filePath, String(content), 'utf-8');
     } catch {
-      // ignore
+      // ignore em disco somente leitura
     }
 
-    return NextResponse.json({
-      success: true,
-      savedIn: savedInNeon ? 'Neon PostgreSQL' : 'Local / Cache',
-      agent: {
-        name: cleanName,
-        fileName,
-        title: details.title,
-        whatItDoes: details.whatItDoes,
-        whenToUse: details.whenToUse,
-        tags: details.tags,
-        chatCommand: `/${cleanName}`,
-        content,
-        sourceUrl,
-        license,
+    return NextResponse.json(
+      {
+        success: true,
+        savedInNeon,
+        savedIn: savedInNeon ? 'Neon PostgreSQL' : 'Cache Local',
+        warning: !savedInNeon
+          ? 'DATABASE_URL não configurada no servidor. O agente foi salvo apenas localmente no navegador e a tabela no Neon permanecerá vazia até conectar a variável na Vercel e fazer Redeploy.'
+          : undefined,
+        agent: {
+          id: dbRowId,
+          name: cleanName,
+          fileName,
+          title: details.title,
+          whatItDoes: details.whatItDoes,
+          whenToUse: details.whenToUse,
+          tags: details.tags,
+          chatCommand: `/${cleanName}`,
+          content: String(content),
+          sourceUrl,
+          license,
+          database: savedInNeon ? 'Neon PostgreSQL' : 'Cache Local',
+        },
       },
-    }, { status: 201 });
+      { status: 201 }
+    );
   } catch (err) {
     return NextResponse.json(
-      { error: `Erro ao processar agente: ${err instanceof Error ? err.message : String(err)}` },
+      {
+        error: `Erro ao processar agente: ${err instanceof Error ? err.message : String(err)}`,
+      },
       { status: 500 }
     );
   }
@@ -223,16 +314,13 @@ export async function DELETE(request: Request) {
     const deleteAll = searchParams.get('all') === 'true';
     const name = searchParams.get('name');
 
-    const sql = getDb();
+    const resolved = resolveDatabaseEnv();
 
     if (deleteAll) {
-      if (sql) {
-        try {
-          await initDb();
-          await sql`DELETE FROM agents;`;
-        } catch (err) {
-          console.warn('Erro ao limpar tabela do Neon:', err);
-        }
+      if (resolved) {
+        await initDb();
+        const sql = neon(resolved.connectionString);
+        await sql`DELETE FROM agents;`;
       }
 
       try {
@@ -247,26 +335,26 @@ export async function DELETE(request: Request) {
         // ignore
       }
 
-      return NextResponse.json({ success: true, message: 'Todos os agentes foram excluídos com sucesso' });
+      return NextResponse.json({
+        success: true,
+        message: 'Todos os agentes foram excluídos com sucesso',
+      });
     }
 
     if (!name) {
       return NextResponse.json({ error: 'Nome é obrigatório' }, { status: 400 });
     }
 
-    if (sql) {
-      try {
-        await initDb();
-        await sql`DELETE FROM agents WHERE name = ${name};`;
-      } catch (err) {
-        console.warn('Erro ao deletar do Neon:', err);
-      }
+    if (resolved) {
+      await initDb();
+      const sql = neon(resolved.connectionString);
+      await sql`DELETE FROM agents WHERE name = ${name};`;
     }
 
     const fileName = `${name}.md`;
     try {
       const dir = ensureAgentsDir();
-      const filePath = path.join(dir, fileName);
+      const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
@@ -276,6 +364,11 @@ export async function DELETE(request: Request) {
 
     return NextResponse.json({ success: true, message: `Agente ${fileName} removido` });
   } catch (err) {
-    return NextResponse.json({ error: 'Erro ao remover' }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: `Erro ao remover agente: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      { status: 500 }
+    );
   }
 }
