@@ -482,6 +482,90 @@ export async function upsertAgentInDb(params: {
   };
 }
 
+/**
+ * Atualiza o frontmatter YAML de um arquivo markdown substituindo ou adicionando `category: <newCategory>`.
+ */
+export function updateMarkdownFrontmatterCategory(content: string, newCategory: string): string {
+  if (/^---\r?\n/m.test(content)) {
+    if (/^category:\s*.*$/mi.test(content)) {
+      return content.replace(/^category:\s*.*$/mi, `category: ${newCategory}`);
+    } else {
+      return content.replace(/^---\r?\n/, `---\ncategory: ${newCategory}\n`);
+    }
+  } else {
+    return `---\ncategory: ${newCategory}\n---\n\n${content}`;
+  }
+}
+
+/**
+ * Atualiza a categoria de um agente no banco de dados Neon PostgreSQL.
+ */
+export async function updateAgentCategoryInDb(
+  name: string,
+  category: string
+): Promise<{ row: DbAgent; dbMeta: ResolvedDbEnv }> {
+  const resolved = await initDb();
+  if (!resolved) {
+    throw new Error('Nenhuma variável de conexão com o Neon encontrada no ambiente.');
+  }
+
+  const cleanName = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/^-|-$/g, '');
+  const validCategory = detectAgentCategory(cleanName, '', category);
+
+  const sql = neon(resolved.connectionString);
+  const rows = await sql`
+    UPDATE agents
+    SET category = ${validCategory}, updated_at = CURRENT_TIMESTAMP
+    WHERE name = ${cleanName}
+    RETURNING id, name, title, content, file_name, category, source_url, license, created_at, updated_at;
+  `;
+
+  if (!rows || rows.length === 0) {
+    throw new Error(`Agente '${cleanName}' não encontrado no banco de dados Neon.`);
+  }
+
+  return {
+    row: rows[0] as DbAgent,
+    dbMeta: resolved,
+  };
+}
+
+/**
+ * Atualiza o arquivo markdown local em `agents/` caso exista no ambiente Node.
+ */
+export function updateLocalAgentFileCategory(name: string, newCategory: string): boolean {
+  try {
+    if (typeof process === 'undefined' || typeof (process as any).getBuiltinModule !== 'function') {
+      return false;
+    }
+    const fs = (process as any).getBuiltinModule('node:fs') as typeof import('node:fs');
+    const path = (process as any).getBuiltinModule('node:path') as typeof import('node:path');
+    if (!fs || !path) return false;
+
+    const dirsToCheck = [
+      path.join(process.cwd(), 'agents'),
+      path.join(process.cwd(), '.agents', 'agents'),
+    ];
+
+    let updated = false;
+    for (const dir of dirsToCheck) {
+      const filePath = path.join(dir, `${name}.md`);
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const newContent = updateMarkdownFrontmatterCategory(content, newCategory);
+        fs.writeFileSync(filePath, newContent, 'utf-8');
+        updated = true;
+      }
+    }
+    return updated;
+  } catch {
+    return false;
+  }
+}
+
 export async function checkDbStatus(forceInitTable = true): Promise<DbStatusResult> {
   const resolved = resolveDatabaseEnv();
 

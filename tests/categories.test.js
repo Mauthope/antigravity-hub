@@ -4,12 +4,14 @@ import {
   detectAgentCategory,
   parseAgentDetails,
   loadBundledAgentsFromRepo,
+  updateMarkdownFrontmatterCategory,
 } from '../dist/lib/db.js';
 import {
   fetchAllAgents,
   fetchAgentByName,
   persistAgent,
   removeAgent,
+  updateAgentCategory,
 } from '../dist/mcp-server/server.js';
 import { AGENT_CATEGORIES } from '../dist/types/index.js';
 
@@ -129,5 +131,45 @@ describe('Antigravity Hub - Sistema de Categorização de Agentes', () => {
       'designer-akiom deve estar listado na categoria design'
     );
   });
+
+  test('updateMarkdownFrontmatterCategory deve atualizar ou injetar a categoria no markdown', () => {
+    const original = `---\nname: my-agent\nlicense: MIT\n---\n# My Agent`;
+    const updated = updateMarkdownFrontmatterCategory(original, 'security');
+    assert.ok(updated.includes('category: security'));
+    assert.ok(updated.includes('license: MIT'));
+
+    const existingCat = `---\nname: test\ncategory: general\n---\n# Test`;
+    const reclassified = updateMarkdownFrontmatterCategory(existingCat, 'data');
+    assert.ok(reclassified.includes('category: data'));
+    assert.ok(!reclassified.includes('category: general'));
+  });
+
+  test('Deve permitir mover um agente existente para outra categoria via updateAgentCategory', async () => {
+    const tempName = 'test-movable-agent';
+    await persistAgent(tempName, '# Agente Temporario\nInicial em Geral', 'Agente Temporario', 'MIT', undefined, 'general');
+
+    try {
+      const initial = await fetchAgentByName(tempName);
+      assert.ok(initial);
+      assert.equal(initial.category, 'general');
+
+      // Move para categoria 'security'
+      const moved = await updateAgentCategory(tempName, 'security');
+      assert.equal(moved.category, 'security');
+
+      const afterMove = await fetchAgentByName(tempName);
+      assert.ok(afterMove);
+      assert.equal(afterMove.category, 'security');
+
+      // Move para categoria 'architecture'
+      await updateAgentCategory(tempName, 'architecture');
+      const afterSecondMove = await fetchAgentByName(tempName);
+      assert.ok(afterSecondMove);
+      assert.equal(afterSecondMove.category, 'architecture');
+    } finally {
+      await removeAgent(tempName);
+    }
+  });
 });
+
 

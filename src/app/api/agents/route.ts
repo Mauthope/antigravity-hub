@@ -10,6 +10,9 @@ import {
   resolveDatabaseEnv,
   upsertAgentInDb,
   loadBundledAgentsFromRepo,
+  updateAgentCategoryInDb,
+  updateLocalAgentFileCategory,
+  updateMarkdownFrontmatterCategory,
 } from '@/lib/db';
 import { AGENT_CATEGORIES } from '@/types';
 
@@ -460,3 +463,162 @@ export async function DELETE(request: Request) {
     );
   }
 }
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json();
+    const resolved = resolveDatabaseEnv();
+
+    const rawCategory = body.category;
+    if (!rawCategory) {
+      return NextResponse.json(
+        { error: 'A nova categoria é obrigatória.' },
+        { status: 400 }
+      );
+    }
+
+    const validCategory = detectAgentCategory('dummy', '', String(rawCategory));
+
+    // Suporte a migração em lote: { names: string[], category: string }
+    if (Array.isArray(body.names)) {
+      const names: string[] = body.names.filter(Boolean);
+      if (names.length === 0) {
+        return NextResponse.json(
+          { error: 'Nenhum nome de agente fornecido.' },
+          { status: 400 }
+        );
+      }
+
+      let updatedInDb = false;
+      if (resolved) {
+        try {
+          await initDb();
+          const sql = neon(resolved.connectionString);
+          for (const n of names) {
+            await sql`
+              UPDATE agents
+              SET category = ${validCategory}, updated_at = CURRENT_TIMESTAMP
+              WHERE name = ${n};
+            `;
+          }
+          updatedInDb = true;
+        } catch (dbErr) {
+          console.error('[PATCH /api/agents] Erro ao atualizar no Neon:', dbErr);
+        }
+      }
+
+      // Atualiza arquivos locais (.md) se existirem
+      const dir = ensureAgentsDir();
+      for (const n of names) {
+        updateLocalAgentFileCategory(n, validCategory);
+        try {
+          const filePath = path.join(/*turbopackIgnore: true*/ dir, `${n}.md`);
+          if (fs.existsSync(filePath)) {
+            const content = fs.readFileSync(/*turbopackIgnore: true*/ filePath, 'utf-8');
+            fs.writeFileSync(
+              /*turbopackIgnore: true*/ filePath,
+              updateMarkdownFrontmatterCategory(content, validCategory),
+              'utf-8'
+            );
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        updatedCount: names.length,
+        category: validCategory,
+        updatedInDb,
+      });
+    }
+
+    // Suporte a agente individual: { name: string, category: string }
+    const { name } = body;
+    if (!name) {
+      return NextResponse.json(
+        { error: 'Nome do agente é obrigatório.' },
+        { status: 400 }
+      );
+    }
+
+    const cleanName = String(name)
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-')
+      .replace(/^-|-$/g, '');
+
+    let updatedAgent: any = null;
+    let updatedInDb = false;
+
+    if (resolved) {
+      try {
+        const { row } = await updateAgentCategoryInDb(cleanName, validCategory);
+        updatedInDb = true;
+        const details = parseAgentDetails(row.content, row.name, row.category || validCategory);
+        updatedAgent = {
+          id: row.id,
+          name: row.name,
+          fileName: row.file_name,
+          title: row.title || details.title,
+          category: row.category || validCategory,
+          whatItDoes: details.whatItDoes,
+          whenToUse: details.whenToUse,
+          tags: details.tags,
+          content: row.content,
+          chatCommand: `/${row.name}`,
+          sourceUrl: row.source_url,
+          license: row.license,
+          database: 'Neon PostgreSQL',
+        };
+      } catch (dbErr) {
+        console.error('[PATCH /api/agents] Erro no Neon DB:', dbErr);
+      }
+    }
+
+    // Atualiza arquivo local se presente
+    updateLocalAgentFileCategory(cleanName, validCategory);
+    const dir = ensureAgentsDir();
+    const filePath = path.join(/*turbopackIgnore: true*/ dir, `${cleanName}.md`);
+    if (fs.existsSync(filePath)) {
+      try {
+        const content = fs.readFileSync(/*turbopackIgnore: true*/ filePath, 'utf-8');
+        const newContent = updateMarkdownFrontmatterCategory(content, validCategory);
+        fs.writeFileSync(/*turbopackIgnore: true*/ filePath, newContent, 'utf-8');
+        if (!updatedAgent) {
+          const details = parseAgentDetails(newContent, cleanName, validCategory);
+          updatedAgent = {
+            name: cleanName,
+            fileName: `${cleanName}.md`,
+            title: details.title,
+            category: validCategory,
+            whatItDoes: details.whatItDoes,
+            whenToUse: details.whenToUse,
+            tags: details.tags,
+            content: newContent,
+            chatCommand: `/${cleanName}`,
+            database: 'Cache Local',
+          };
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      name: cleanName,
+      category: validCategory,
+      updatedInDb,
+      agent: updatedAgent,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error: `Erro ao atualizar categoria: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      { status: 500 }
+    );
+  }
+}
+

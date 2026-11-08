@@ -267,6 +267,26 @@ agentCmd
     }
   });
 
+agentCmd
+  .command('category <name> <category>')
+  .description('Muda ou atribui uma categoria tática para um agente existente (design, development, architecture, security, data, orchestration, general)')
+  .option('-l, --local', 'Aplica apenas no projeto local')
+  .option('-g, --global', 'Aplica apenas no escopo global')
+  .action(async (name: string, category: string, opts: { local?: boolean; global?: boolean }) => {
+    try {
+      const target = opts.local ? 'local' : opts.global ? 'global' : 'both';
+      const updated = AgentManager.updateAgentCategory(name, category, { target });
+      
+      // Also update in Neon / local agents directory if present
+      const { updateAgentCategory } = await import('../mcp-server/server.js');
+      await updateAgentCategory(name, category);
+
+      console.log(`\n[OK] Agente '${name}' movido para a categoria '${category}' com sucesso!\n`);
+    } catch (err) {
+      console.error(`\n[ERRO] Falha ao atualizar categoria do agente: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  });
+
 // ==========================================
 // MCP COMMANDS
 // ==========================================

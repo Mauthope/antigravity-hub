@@ -194,4 +194,52 @@ Ao ser acionado pelo usuário:
 
     return deleted;
   }
+
+  /**
+   * Update category of an existing agent definition and its activation skill.
+   */
+  static updateAgentCategory(
+    name: string,
+    category: string,
+    options: { target?: 'local' | 'global' | 'both'; workspaceRoot?: string } = {}
+  ): boolean {
+    const paths = resolveHubPaths(options.workspaceRoot);
+    const target = options.target || 'both';
+    let updated = false;
+
+    const updateInDir = (agentsDir: string, skillsDir: string) => {
+      const jsonPath = path.join(agentsDir, `${name}.json`);
+      if (fs.existsSync(jsonPath)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+          raw.category = category;
+          fs.writeFileSync(jsonPath, JSON.stringify(raw, null, 2), 'utf-8');
+          updated = true;
+        } catch {}
+      }
+
+      const skillPath = path.join(skillsDir, name, 'SKILL.md');
+      if (fs.existsSync(skillPath)) {
+        try {
+          let content = fs.readFileSync(skillPath, 'utf-8');
+          if (/^category:\s*.*$/mi.test(content)) {
+            content = content.replace(/^category:\s*.*$/mi, `category: ${category}`);
+          } else if (/^---\r?\n/m.test(content)) {
+            content = content.replace(/^---\r?\n/, `---\ncategory: ${category}\n`);
+          }
+          fs.writeFileSync(skillPath, content, 'utf-8');
+          updated = true;
+        } catch {}
+      }
+    };
+
+    if (target === 'local' || target === 'both') {
+      updateInDir(path.join(paths.localAgentsDir, 'agents'), paths.localSkillsDir);
+    }
+    if (target === 'global' || target === 'both') {
+      updateInDir(paths.globalAgentsDir, paths.globalSkillsDir);
+    }
+
+    return updated;
+  }
 }

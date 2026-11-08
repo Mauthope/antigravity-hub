@@ -9,6 +9,10 @@ import {
   parseAgentDetails,
   resolveDatabaseEnv,
   upsertAgentInDb,
+  updateAgentCategoryInDb,
+  updateLocalAgentFileCategory,
+  updateMarkdownFrontmatterCategory,
+  detectAgentCategory,
 } from '../lib/db.js';
 import { LicenseVerifier } from '../license/verifier.js';
 
@@ -253,6 +257,37 @@ export async function removeAgent(name: string) {
   }
 
   return { success: true, message: `Agente '${cleanName}' removido.` };
+}
+
+export async function updateAgentCategory(name: string, category: string) {
+  const cleanName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  const validCategory = detectAgentCategory(cleanName, '', category);
+  const resolved = resolveDatabaseEnv();
+  let updatedInDb = false;
+
+  if (resolved) {
+    await updateAgentCategoryInDb(cleanName, validCategory);
+    updatedInDb = true;
+  }
+
+  updateLocalAgentFileCategory(cleanName, validCategory);
+  try {
+    const dir = getAgentsDir();
+    const filePath = path.join(dir, `${cleanName}.md`);
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      fs.writeFileSync(filePath, updateMarkdownFrontmatterCategory(content, validCategory), 'utf-8');
+    }
+  } catch {
+    // ignore
+  }
+
+  return {
+    name: cleanName,
+    category: validCategory,
+    updatedInDb,
+    message: `Agente '${cleanName}' atualizado com sucesso para a categoria '${validCategory}'.`,
+  };
 }
 
 export function createHubMcpServer() {
@@ -575,6 +610,44 @@ export function createHubMcpServer() {
             {
               type: 'text',
               text: `Erro ao excluir agente: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  // TOOL 6: update_agent_category
+  server.tool(
+    'update_agent_category',
+    'Altera ou define a categoria tática de um agente existente no Antigravity Hub (Neon PostgreSQL e arquivos locais).',
+    {
+      name: z.string().describe('Nome único do agente (slug, ex: start, reviewer, designer-akiom)'),
+      category: z
+        .enum([
+          'design',
+          'development',
+          'architecture',
+          'security',
+          'data',
+          'orchestration',
+          'general',
+        ])
+        .describe('Nova categoria tática a ser atribuída'),
+    },
+    async ({ name, category }) => {
+      try {
+        const result = await updateAgentCategory(name, category);
+        return {
+          content: [{ type: 'text', text: result.message }],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Erro ao atualizar categoria do agente: ${err instanceof Error ? err.message : String(err)}`,
             },
           ],
         };

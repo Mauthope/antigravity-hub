@@ -75,6 +75,7 @@ export default function HomePage() {
   const [activeTab, setActiveTab] = useState<'all' | 'upload' | 'github'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [batchTargetCategory, setBatchTargetCategory] = useState<string>('');
 
   // Upload/Manual State
   const [uploadName, setUploadName] = useState('');
@@ -490,6 +491,81 @@ export default function HomePage() {
       }
     } catch {
       // ignore
+    }
+  };
+
+  const handleUpdateCategory = async (name: string, newCategory: string) => {
+    const catMeta = getCategoryMeta(newCategory);
+    const prevAgents = [...agents];
+
+    // Atualização otimista imediata na UI
+    const updated = agents.map((a) =>
+      a.name === name ? { ...a, category: newCategory } : a
+    );
+    setAgents(updated);
+    saveToStorage(updated);
+    showToast(`Agente '${name}' movido para '${catMeta.label}'.`);
+
+    if (previewAgent && previewAgent.name === name) {
+      setPreviewAgent({ ...previewAgent, category: newCategory });
+    }
+
+    try {
+      const res = await fetch('/api/agents', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, category: newCategory }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Falha ao salvar categoria no servidor.');
+        setAgents(prevAgents);
+        saveToStorage(prevAgents);
+      } else if (dbConnected) {
+        checkNeonStatus(false);
+      }
+    } catch {
+      showToast('Erro de conexão ao salvar categoria.');
+    }
+  };
+
+  const handleBatchMoveCategory = async (targetCategory: string) => {
+    if (!targetCategory || targetCategory === 'all' || filteredAgents.length === 0) return;
+    const catMeta = getCategoryMeta(targetCategory);
+    const names = filteredAgents.map((a) => a.name);
+
+    if (
+      !confirm(
+        `Deseja mover todos os ${names.length} agentes visíveis para a categoria '${catMeta.label}'?`
+      )
+    ) {
+      return;
+    }
+
+    const prevAgents = [...agents];
+    const updated = agents.map((a) =>
+      names.includes(a.name) ? { ...a, category: targetCategory } : a
+    );
+    setAgents(updated);
+    saveToStorage(updated);
+    showToast(`${names.length} agentes movidos para '${catMeta.label}'.`);
+
+    try {
+      const res = await fetch('/api/agents', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names, category: targetCategory }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Falha ao atualizar categorias.');
+        setAgents(prevAgents);
+        saveToStorage(prevAgents);
+      } else if (dbConnected) {
+        checkNeonStatus(false);
+      }
+    } catch {
+      showToast('Erro de conexão ao mover agentes.');
     }
   };
 
@@ -1214,6 +1290,44 @@ export default function HomePage() {
             </div>
           </div>
 
+          {/* BATCH MOVE CATEGORY BAR */}
+          {!loading && filteredAgents.length > 0 && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-slate-100/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800/80 backdrop-blur-md">
+              <div className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 font-heading">
+                <Layers className="w-4 h-4 text-cyan-600 dark:text-cyan-400 shrink-0" strokeWidth={2} />
+                <span>
+                  <strong>{filteredAgents.length}</strong> agente{filteredAgents.length !== 1 ? 's' : ''} nesta visualização
+                  {selectedCategory !== 'all' ? ` em "${getCategoryMeta(selectedCategory).label}"` : ''}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-heading font-semibold text-slate-500 dark:text-slate-400 shrink-0">
+                  Mover todos para:
+                </span>
+                <select
+                  value={batchTargetCategory}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setBatchTargetCategory(val);
+                    if (val) {
+                      handleBatchMoveCategory(val);
+                      setBatchTargetCategory('');
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 text-xs font-heading font-bold focus:outline-none focus:ring-1 focus:ring-cyan-500 cursor-pointer shadow-xs"
+                >
+                  <option value="">Selecione a Categoria...</option>
+                  {AGENT_CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
           {loading ? (
             <div className="p-12 text-center text-xs font-heading font-bold text-slate-400">
               Carregando catalogo de agentes...
@@ -1351,6 +1465,26 @@ export default function HomePage() {
                           ))}
                         </div>
                       )}
+
+                      {/* Interactive Category Mover */}
+                      <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-100/70 dark:bg-slate-900/70 border border-slate-200/70 dark:border-slate-800/70">
+                        <span className="text-[10px] font-heading font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" strokeWidth={2} />
+                          <span>Mover Categoria:</span>
+                        </span>
+                        <select
+                          value={agent.category || 'general'}
+                          onChange={(e) => handleUpdateCategory(agent.name, e.target.value)}
+                          className="text-[11px] font-heading font-bold px-2.5 py-1 rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-cyan-500 cursor-pointer shadow-xs transition-colors"
+                          title="Alterar a categoria deste agente"
+                        >
+                          {AGENT_CATEGORIES.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
 
                     {/* Actions Footer */}
@@ -1426,10 +1560,26 @@ export default function HomePage() {
                   {(() => {
                     const meta = getCategoryMeta(previewAgent.category);
                     return (
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-heading font-bold border ${meta.badgeClass}`}>
-                        {meta.icon}
-                        <span>{meta.label}</span>
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-heading font-bold border ${meta.badgeClass}`}>
+                          {meta.icon}
+                          <span>{meta.label}</span>
+                        </span>
+                        <div className="flex items-center gap-1 text-[11px] font-heading">
+                          <span className="text-slate-400">Mover para:</span>
+                          <select
+                            value={previewAgent.category || 'general'}
+                            onChange={(e) => handleUpdateCategory(previewAgent.name, e.target.value)}
+                            className="px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-heading font-bold cursor-pointer"
+                          >
+                            {AGENT_CATEGORIES.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
                     );
                   })()}
                 </div>
