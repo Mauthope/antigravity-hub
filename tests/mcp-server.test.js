@@ -47,6 +47,12 @@ describe('Antigravity Hub - Servidor MCP Oficial', () => {
     assert.equal(audit.spdxId, 'MIT');
   });
 
+  test('Auditoria de Licença no MCP deve APROVAR repositório Apache-2.0 (google-research/timesfm)', async () => {
+    const audit = await LicenseVerifier.verifyRepo('google-research', 'timesfm');
+    assert.equal(audit.valid, true);
+    assert.equal(audit.spdxId, 'Apache-2.0');
+  });
+
   test('Auditoria de Licença no MCP deve BLOQUEAR repositório GPL (Linux)', async () => {
     const audit = await LicenseVerifier.verifyRepo('torvalds', 'linux');
     assert.equal(audit.valid, false);

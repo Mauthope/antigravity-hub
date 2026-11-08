@@ -78,43 +78,72 @@ export async function POST(request: Request) {
       'README.md',
     ];
 
+    const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+    const baseHeaders: Record<string, string> = {
+      'User-Agent': 'Antigravity-Hub/1.0',
+    };
+    if (token && token.trim().length > 0) {
+      baseHeaders['Authorization'] = `Bearer ${token.trim()}`;
+    }
+
     let foundContent = '';
-    const branches = explicitBranch ? [explicitBranch, 'main', 'master'] : ['main', 'master'];
+    const branches = Array.from(
+      new Set(explicitBranch ? [explicitBranch, 'HEAD', 'main', 'master'] : ['HEAD', 'main', 'master'])
+    ).filter(Boolean);
 
     for (const b of branches) {
       if (explicitSubpath && explicitSubpath.toLowerCase().endsWith('.md')) {
-        try {
-          const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${explicitSubpath}`;
-          const res = await fetch(rawUrl, { headers: { 'User-Agent': 'Antigravity-Hub/1.0' } });
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text.trim().length > 20) {
-              foundContent = text;
-              break;
+        const directUrls = [
+          `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${explicitSubpath}`,
+          `https://github.com/${owner}/${repo}/raw/${b}/${explicitSubpath}`,
+        ];
+        for (const rawUrl of directUrls) {
+          try {
+            const res = await fetch(rawUrl, {
+              headers: baseHeaders,
+              signal: AbortSignal.timeout(6000),
+            });
+            if (res.ok) {
+              const text = await res.text();
+              if (text && text.trim().length > 20) {
+                foundContent = text;
+                break;
+              }
             }
+          } catch {
+            // continue
           }
-        } catch {
-          // continue
         }
+        if (foundContent) break;
       }
 
       for (const candidate of candidates) {
-        try {
-          const targetPath = explicitSubpath
-            ? `${explicitSubpath}/${candidate}`
-            : candidate;
-          const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${targetPath}`;
-          const res = await fetch(rawUrl, { headers: { 'User-Agent': 'Antigravity-Hub/1.0' } });
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text.trim().length > 30) {
-              foundContent = text;
-              break;
+        const targetPath = explicitSubpath
+          ? `${explicitSubpath}/${candidate}`
+          : candidate;
+        const candidateUrls = [
+          `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${targetPath}`,
+          `https://github.com/${owner}/${repo}/raw/${b}/${targetPath}`,
+        ];
+
+        for (const rawUrl of candidateUrls) {
+          try {
+            const res = await fetch(rawUrl, {
+              headers: baseHeaders,
+              signal: AbortSignal.timeout(6000),
+            });
+            if (res.ok) {
+              const text = await res.text();
+              if (text && text.trim().length > 30) {
+                foundContent = text;
+                break;
+              }
             }
+          } catch {
+            // continue
           }
-        } catch {
-          // continue
         }
+        if (foundContent) break;
       }
       if (foundContent) break;
     }

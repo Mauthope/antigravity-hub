@@ -427,22 +427,36 @@ export function createHubMcpServer() {
         // 2. Busca do arquivo markdown
         const candidates = ['SKILL.md', 'agent.md', 'AGENTS.md', 'agents.md', 'README.md'];
         let foundContent = '';
+        const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+        const fetchHeaders: Record<string, string> = { 'User-Agent': 'Antigravity-Hub/1.0' };
+        if (token && token.trim().length > 0) {
+          fetchHeaders['Authorization'] = `Bearer ${token.trim()}`;
+        }
 
-        for (const b of ['main', 'master']) {
+        for (const b of ['HEAD', 'main', 'master']) {
           for (const cand of candidates) {
-            try {
-              const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${cand}`;
-              const res = await fetch(rawUrl, { headers: { 'User-Agent': 'Antigravity-Hub/1.0' } });
-              if (res.ok) {
-                const text = await res.text();
-                if (text && text.trim().length > 30) {
-                  foundContent = text;
-                  break;
+            const urls = [
+              `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${cand}`,
+              `https://github.com/${owner}/${repo}/raw/${b}/${cand}`,
+            ];
+            for (const rawUrl of urls) {
+              try {
+                const res = await fetch(rawUrl, {
+                  headers: fetchHeaders,
+                  signal: AbortSignal.timeout(5000),
+                });
+                if (res.ok) {
+                  const text = await res.text();
+                  if (text && text.trim().length > 30) {
+                    foundContent = text;
+                    break;
+                  }
                 }
+              } catch {
+                // continue
               }
-            } catch {
-              // continue
             }
+            if (foundContent) break;
           }
           if (foundContent) break;
         }
