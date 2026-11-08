@@ -31,6 +31,8 @@ import {
 } from 'lucide-react';
 import { GlassCapsuleButton } from '@/components/ui/glass-capsule-button';
 import { SquircleKpiCard } from '@/components/ui/squircle-kpi-card';
+import { TactilePillTabs } from '@/components/ui/tactile-pill-tabs';
+import { AkiomWallDock } from '@/components/ui/akiom-wall-dock';
 
 interface AgentMd {
   id?: number;
@@ -66,6 +68,7 @@ export default function HomePage() {
   const [agents, setAgents] = useState<AgentMd[]>([]);
   const [loading, setLoading] = useState(true);
   const [isDark, setIsDark] = useState(true);
+  const [activeTab, setActiveTab] = useState<'all' | 'upload' | 'github'>('all');
 
   // Upload/Manual State
   const [uploadName, setUploadName] = useState('');
@@ -510,7 +513,7 @@ export default function HomePage() {
   const localOnlyCount = agents.filter((a) => a.database !== 'Neon PostgreSQL').length;
 
   return (
-    <div className="min-h-screen antialiased p-4 sm:p-6 lg:p-10 transition-colors duration-300">
+    <div className="min-h-screen antialiased p-4 sm:p-6 lg:p-10 pb-32 transition-colors duration-300">
       {/* TOAST */}
       {toast && (
         <div className="fixed top-6 right-6 z-50 max-w-md bg-slate-900 dark:bg-slate-800 text-white px-5 py-3.5 rounded-2xl shadow-2xl text-xs font-heading font-bold flex items-center gap-2.5 border border-cyan-500/40">
@@ -713,10 +716,47 @@ export default function HomePage() {
           />
         </section>
 
-        {/* TWO PRIMARY INTERACTION SURFACES */}
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* TACTILE PILL TABS PER DESIGNER AKIOM */}
+        <section className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <TactilePillTabs
+            tabs={[
+              {
+                id: 'all',
+                label: 'Catálogo Completo',
+                badge: agents.length,
+                accent: 'cyan',
+                icon: <Bot className="w-4 h-4" strokeWidth={2} />,
+              },
+              {
+                id: 'upload',
+                label: 'Subir Arquivo .md',
+                accent: 'violet',
+                icon: <UploadCloud className="w-4 h-4" strokeWidth={2} />,
+              },
+              {
+                id: 'github',
+                label: 'Salvar do GitHub (0% Risco)',
+                badge: 'MIT / Apache-2.0',
+                accent: 'emerald',
+                icon: <GitPullRequest className="w-4 h-4" strokeWidth={2} />,
+              },
+            ]}
+            activeId={activeTab}
+            onChange={(id) => setActiveTab(id as 'all' | 'upload' | 'github')}
+          />
+        </section>
+
+        {/* PRIMARY INTERACTION SURFACES */}
+        <section
+          className={
+            activeTab === 'all'
+              ? 'grid grid-cols-1 lg:grid-cols-2 gap-6'
+              : 'max-w-2xl mx-auto w-full'
+          }
+        >
           {/* ACTION 1: SUBIR ARQUIVO .MD */}
-          <div className="glow-card p-6 sm:p-8 flex flex-col justify-between space-y-6">
+          {(activeTab === 'all' || activeTab === 'upload') && (
+            <div className="glow-card p-6 sm:p-8 flex flex-col justify-between space-y-6">
             <div className="space-y-2">
               <div className="flex items-center gap-2.5 text-cyan-600 dark:text-cyan-400">
                 <UploadCloud className="w-5 h-5" strokeWidth={2.2} />
@@ -798,76 +838,79 @@ export default function HomePage() {
               </div>
             </form>
           </div>
+          )}
 
           {/* ACTION 2: SALVAR DE REPOSITÓRIO GITHUB */}
-          <div className="glow-card p-6 sm:p-8 flex flex-col justify-between space-y-6">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2.5 text-emerald-600 dark:text-emerald-400">
-                <GitPullRequest className="w-5 h-5" strokeWidth={2.2} />
-                <h2 className="font-heading font-bold text-lg sm:text-xl text-slate-900 dark:text-white">
-                  Salvar de Repositorio GitHub
-                </h2>
-              </div>
-              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                Cole a URL de qualquer repositorio ou arquivo <code className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">.md</code> no GitHub para auditar a licenca e gravar no Neon:
-              </p>
-            </div>
-
-            <form onSubmit={handleImportGithub} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-heading font-bold uppercase tracking-wider text-[11px]">
-                  URL do Repositorio GitHub:
-                </label>
-                <input
-                  type="text"
-                  value={githubUrl}
-                  onChange={(e) => setGithubUrl(e.target.value)}
-                  placeholder="https://github.com/usuario/meu-agente"
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs"
-                  required
-                />
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-100/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80 text-xs text-slate-600 dark:text-slate-400 space-y-2">
-                <span className="font-heading font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider text-[10px] block">
-                  Regras de Auditoria Automatizada:
-                </span>
-                <p className="leading-relaxed">
-                  • <strong>0% Risco Juridico:</strong> Apenas licencas permissivas <strong>MIT</strong> e <strong>Apache-2.0</strong> sao autorizadas.
-                </p>
-                <p className="leading-relaxed">
-                  • <strong>Gravacao Atomica:</strong> Valida a licenca e insere diretamente na tabela <code className="font-mono text-cyan-600 dark:text-cyan-300">agents</code> do Neon PostgreSQL.
-                </p>
-              </div>
-
-              {githubStatus && (
-                <div
-                  className={`p-3.5 rounded-2xl border text-xs leading-relaxed ${
-                    githubStatus.type === 'success'
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                      : githubStatus.type === 'warning'
-                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-                      : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
-                  }`}
-                >
-                  {githubStatus.message}
+          {(activeTab === 'all' || activeTab === 'github') && (
+            <div className="glow-card p-6 sm:p-8 flex flex-col justify-between space-y-6">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2.5 text-emerald-600 dark:text-emerald-400">
+                  <GitPullRequest className="w-5 h-5" strokeWidth={2.2} />
+                  <h2 className="font-heading font-bold text-lg sm:text-xl text-slate-900 dark:text-white">
+                    Salvar de Repositorio GitHub
+                  </h2>
                 </div>
-              )}
-
-              <div className="pt-2">
-                <GlassCapsuleButton
-                  type="submit"
-                  variant="emerald"
-                  size="md"
-                  isLoading={isImporting}
-                  icon={<GitPullRequest className="w-4 h-4" strokeWidth={2} />}
-                  className="w-full justify-center"
-                >
-                  {isImporting ? 'Auditando e Salvando...' : 'Baixar e Salvar como Agente'}
-                </GlassCapsuleButton>
+                <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Cole a URL de qualquer repositorio ou arquivo <code className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">.md</code> no GitHub para auditar a licenca e gravar no Neon:
+                </p>
               </div>
-            </form>
-          </div>
+
+              <form onSubmit={handleImportGithub} className="space-y-4 text-xs">
+                <div>
+                  <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-heading font-bold uppercase tracking-wider text-[11px]">
+                    URL do Repositorio GitHub:
+                  </label>
+                  <input
+                    type="text"
+                    value={githubUrl}
+                    onChange={(e) => setGithubUrl(e.target.value)}
+                    placeholder="https://github.com/usuario/meu-agente"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs"
+                    required
+                  />
+                </div>
+
+                <div className="p-4 rounded-2xl holographic-surface text-xs text-slate-800 dark:text-slate-200 space-y-2">
+                  <span className="font-heading font-bold text-slate-900 dark:text-white uppercase tracking-wider text-[10px] block">
+                    Regras de Auditoria Automatizada:
+                  </span>
+                  <p className="leading-relaxed">
+                    • <strong>0% Risco Juridico:</strong> Apenas licencas permissivas <strong>MIT</strong> e <strong>Apache-2.0</strong> sao autorizadas.
+                  </p>
+                  <p className="leading-relaxed">
+                    • <strong>Gravacao Atomica:</strong> Valida a licenca e insere diretamente na tabela <code className="font-mono text-cyan-600 dark:text-cyan-300">agents</code> do Neon PostgreSQL.
+                  </p>
+                </div>
+
+                {githubStatus && (
+                  <div
+                    className={`p-3.5 rounded-2xl border text-xs leading-relaxed ${
+                      githubStatus.type === 'success'
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                        : githubStatus.type === 'warning'
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                        : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+                    }`}
+                  >
+                    {githubStatus.message}
+                  </div>
+                )}
+
+                <div className="pt-2">
+                  <GlassCapsuleButton
+                    type="submit"
+                    variant="emerald"
+                    size="md"
+                    isLoading={isImporting}
+                    icon={<GitPullRequest className="w-4 h-4" strokeWidth={2} />}
+                    className="w-full justify-center"
+                  >
+                    {isImporting ? 'Auditando e Salvando...' : 'Baixar e Salvar como Agente'}
+                  </GlassCapsuleButton>
+                </div>
+              </form>
+            </div>
+          )}
         </section>
 
         {/* SECTION: AGENT CARDS WITH SIMPLIFIED DESCRIPTIONS */}
@@ -1066,6 +1109,23 @@ export default function HomePage() {
           )}
         </section>
       </div>
+
+      {/* FLOATING AKIOM WALL DOCK PER DESIGNER AKIOM */}
+      <AkiomWallDock
+        activeSection={activeTab === 'all' ? 'catalog' : activeTab}
+        onSelectSection={(sec) => {
+          if (sec === 'catalog') setActiveTab('all');
+          if (sec === 'upload') setActiveTab('upload');
+          if (sec === 'github') setActiveTab('github');
+          window.scrollTo({ top: sec === 'catalog' ? 450 : 250, behavior: 'smooth' });
+        }}
+        onOpenNeon={() => setShowNeonModal(true)}
+        onOpenMcp={() => setShowMcpModal(true)}
+        isDark={isDark}
+        onToggleTheme={toggleTheme}
+        dbConnected={dbConnected}
+        agentCount={agents.length}
+      />
 
       {/* MARKDOWN PREVIEW MODAL */}
       {previewAgent && (
