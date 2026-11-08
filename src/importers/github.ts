@@ -106,35 +106,35 @@ export class GitHubSkillImporter {
     const parsed = this.parseUrl(urlOrShorthand);
     const target = options.target || 'local';
 
-    console.log(`\n🔍 [1/4] Auditando licença de '${parsed.owner}/${parsed.repo}'...`);
+    console.log(`\n[INFO] [1/4] Auditando licença de '${parsed.owner}/${parsed.repo}'...`);
 
     // STEP 1: STRICT LICENSE AUDIT (0% LEGAL RISK)
     const licenseResult = await LicenseVerifier.verifyRepo(parsed.owner, parsed.repo, parsed.branch);
     if (!licenseResult.valid) {
-      console.error(`\n❌ ERRO DE CONFORMIDADE LEGAL:`);
+      console.error(`\n[BLOQUEIO] ERRO DE CONFORMIDADE LEGAL:`);
       console.error(licenseResult.error);
       throw new Error(licenseResult.error);
     }
 
-    console.log(`✅ [1/4] Licença aprovada: ${licenseResult.license} (${licenseResult.spdxId}) - Conformidade 100% garantida.`);
+    console.log(`[OK] [1/4] Licença aprovada: ${licenseResult.license} (${licenseResult.spdxId}) - Conformidade 100% garantida.`);
 
     // STEP 2: FETCH SKILL CONTENT
-    console.log(`📥 [2/4] Baixando conteúdo da skill...`);
+    console.log(`[INFO] [2/4] Baixando conteúdo da skill...`);
     const { rawContent, files } = await this.fetchSkillContent(parsed);
 
     // STEP 3: PARSE AND NORMALIZE FRONTMATTER
-    console.log(`⚙️ [3/4] Validando formato e metadados...`);
+    console.log(`[INFO] [3/4] Validando formato e metadados...`);
     const skillDef = this.parseAndNormalizeSkill(rawContent, parsed, licenseResult.spdxId, options.customName);
     skillDef.files = files;
     skillDef.sourceUrl = parsed.originalUrl;
     skillDef.licenseResult = licenseResult;
 
     // STEP 4: INSTALLATION TO DESTINATION
-    console.log(`💾 [4/4] Instalando skill '${skillDef.frontmatter.name}' (${target})...`);
+    console.log(`[INFO] [4/4] Instalando skill '${skillDef.frontmatter.name}' (${target})...`);
     const paths = resolveHubPaths(options.workspaceRoot);
     await this.installToDisk(skillDef, paths, target);
 
-    console.log(`🎉 Sucesso! Skill '${skillDef.frontmatter.name}' instalada com sucesso.`);
+    console.log(`[SUCESSO] Skill '${skillDef.frontmatter.name}' instalada com sucesso.`);
     return skillDef;
   }
 

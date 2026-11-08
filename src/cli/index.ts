@@ -47,7 +47,7 @@ program
       );
     }
 
-    console.log(`\n🚀 Estrutura de agentes e skills inicializada com sucesso em: ${paths.workspaceRoot}`);
+    console.log(`\n[OK] Estrutura de agentes e skills inicializada com sucesso em: ${paths.workspaceRoot}`);
     console.log(`   - Diretório de habilidades: ${paths.localSkillsDir}`);
     console.log(`   - Diretório de agentes: ${path.join(paths.localAgentsDir, 'agents')}`);
     console.log(`   - Configuração MCP: ${paths.localMcpFile}`);
@@ -72,7 +72,7 @@ skillCmd
         customName: opts.name,
       });
     } catch (err) {
-      console.error(`\n❌ Falha ao importar skill: ${err instanceof Error ? err.message : String(err)}\n`);
+      console.error(`\n[ERRO] Falha ao importar skill: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
   });
@@ -82,7 +82,7 @@ skillCmd
   .description('Lista todas as skills instaladas (locais e globais)')
   .action(() => {
     const paths = resolveHubPaths();
-    console.log('\n📦 Skills Instaladas:\n');
+    console.log('\n[SKILLS] Skills Instaladas:\n');
 
     console.log('--- [Projeto Local: .agents/skills/] ---');
     if (fs.existsSync(paths.localSkillsDir)) {
@@ -114,7 +114,7 @@ skillCmd
     const sourceDir = fs.existsSync(sourceGlobal) ? sourceGlobal : fs.existsSync(sourceLocal) ? sourceLocal : null;
 
     if (!sourceDir) {
-      console.error(`\n❌ Skill '${name}' não encontrada nem em local (.agents/skills) nem em global (~/.gemini/config/skills).\n`);
+      console.error(`\n[ERRO] Skill '${name}' não encontrada nem em local (.agents/skills) nem em global (~/.gemini/config/skills).\n`);
       process.exit(1);
     }
 
@@ -143,10 +143,10 @@ skillCmd
         cwd: '/home/antigravity/antigravity-hub',
         stdio: 'inherit',
       });
-      console.log(`\n🎉 Sucesso! A skill '${name}' foi salva e enviada para o seu GitHub:`);
-      console.log(`   👉 https://github.com/Mauthope/antigravity-hub/tree/main/skills/${name}\n`);
+      console.log(`\n[OK] Sucesso! A skill '${name}' foi salva e enviada para o seu GitHub:`);
+      console.log(`   -> https://github.com/Mauthope/antigravity-hub/tree/main/skills/${name}\n`);
     } catch (err) {
-      console.error(`\n❌ Erro ao enviar para o GitHub: ${err instanceof Error ? err.message : String(err)}\n`);
+      console.error(`\n[ERRO] Erro ao enviar para o GitHub: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   });
 
@@ -178,7 +178,7 @@ Instruções detalhadas para a habilidade.
 2. Ações...
 `;
     fs.writeFileSync(path.join(skillPath, 'SKILL.md'), content, 'utf-8');
-    console.log(`\n✨ Nova skill '${name}' criada em: ${skillPath}\n`);
+    console.log(`\n[OK] Nova skill '${name}' criada em: ${skillPath}\n`);
   });
 
 // ==========================================
@@ -224,10 +224,10 @@ agentCmd
         { target }
       );
 
-      console.log(`\n🎉 Agente '${name}' pronto!`);
-      console.log(`👉 Agora você pode chamá-lo no chat em QUALQUER projeto digitando: /${name} ou "chame o agente ${name}"\n`);
+      console.log(`\n[OK] Agente '${name}' pronto!`);
+      console.log(`   -> Agora você pode chamá-lo no chat em QUALQUER projeto digitando: /${name} ou "chame o agente ${name}"\n`);
     } catch (err) {
-      console.error(`\n❌ Erro ao criar agente: ${err instanceof Error ? err.message : String(err)}\n`);
+      console.error(`\n[ERRO] Erro ao criar agente: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   });
 
@@ -236,7 +236,7 @@ agentCmd
   .description('Lista todos os agentes disponíveis para invocação no chat')
   .action(() => {
     const { local, global } = AgentManager.listAgents();
-    console.log('\n🤖 Agentes Disponíveis para Invocação no Chat:\n');
+    console.log('\n[AGENTES] Agentes Disponíveis para Invocação no Chat:\n');
 
     console.log('--- [Globais (Acessíveis em QUALQUER projeto)] ---');
     if (global.length === 0) console.log('  (Nenhum agente global cadastrado)');
@@ -261,9 +261,9 @@ agentCmd
   .action((name: string) => {
     const deleted = AgentManager.deleteAgent(name);
     if (deleted) {
-      console.log(`\n🗑️ Agente '${name}' e seu comando de chat foram removidos com sucesso.\n`);
+      console.log(`\n[OK] Agente '${name}' e seu comando de chat foram removidos com sucesso.\n`);
     } else {
-      console.log(`\n⚠️ Agente '${name}' não encontrado.\n`);
+      console.log(`\n[AVISO] Agente '${name}' não encontrado.\n`);
     }
   });
 
@@ -277,7 +277,7 @@ mcpCmd
   .description('Lista os servidores MCP configurados')
   .action(() => {
     const { local, global } = McpManager.listServers();
-    console.log('\n🔌 Servidores MCP Configurados:\n');
+    console.log('\n[MCP] Servidores MCP Configurados:\n');
 
     console.log('--- [Projeto Local: .agents/mcp.json] ---');
     const localKeys = Object.keys(local);
@@ -319,7 +319,7 @@ mcpCmd
         { target }
       );
     } catch (err) {
-      console.error(`\n❌ Erro ao adicionar preset MCP: ${err instanceof Error ? err.message : String(err)}\n`);
+      console.error(`\n[ERRO] Erro ao adicionar preset MCP: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   });
 
@@ -342,7 +342,7 @@ mcpCmd
         { target }
       );
     } catch (err) {
-      console.error(`\n❌ Erro ao adicionar servidor MCP: ${err instanceof Error ? err.message : String(err)}\n`);
+      console.error(`\n[ERRO] Erro ao adicionar servidor MCP: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   });
 
@@ -390,7 +390,7 @@ mcpCmd
         McpManager.addServer('antigravity-hub', serverDef, { target: 'global' });
       }
 
-      console.log('\n✅ [Antigravity Hub] Servidor MCP registrado com sucesso!');
+      console.log('\n[OK] [Antigravity Hub] Servidor MCP registrado com sucesso!');
       console.log(`   - Arquivo Local: ${paths.localMcpFile}`);
       if (opts.global) {
         console.log(`   - Arquivo Global: ${paths.globalMcpFile}`);
@@ -401,7 +401,7 @@ mcpCmd
       console.log('   • save_agent: salva um novo agente diretamente no Neon PostgreSQL');
       console.log('   • import_agent_github: importa agentes do GitHub com auditoria de licença (MIT/Apache-2.0)\n');
     } catch (err) {
-      console.error(`\n❌ Erro ao instalar Servidor MCP: ${err instanceof Error ? err.message : String(err)}\n`);
+      console.error(`\n[ERRO] Erro ao instalar Servidor MCP: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   });
 
@@ -446,7 +446,7 @@ program
         McpManager.addServer('antigravity-hub', serverDef, { target: 'global' });
       }
 
-      console.log('\n✅ [Antigravity Hub] Servidor MCP registrado com sucesso!');
+      console.log('\n[OK] [Antigravity Hub] Servidor MCP registrado com sucesso!');
       console.log(`   - Arquivo Local: ${paths.localMcpFile}`);
       if (opts.global) {
         console.log(`   - Arquivo Global: ${paths.globalMcpFile}`);
@@ -457,7 +457,7 @@ program
       console.log('   • save_agent: salva um novo agente diretamente no Neon PostgreSQL');
       console.log('   • import_agent_github: importa agentes do GitHub com auditoria de licença (MIT/Apache-2.0)\n');
     } catch (err) {
-      console.error(`\n❌ Erro ao instalar Servidor MCP: ${err instanceof Error ? err.message : String(err)}\n`);
+      console.error(`\n[ERRO] Erro ao instalar Servidor MCP: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   });
 

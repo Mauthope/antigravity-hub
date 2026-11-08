@@ -144,7 +144,7 @@ export class McpManager {
       if (!config.mcpServers) config.mcpServers = {};
       config.mcpServers[name] = serverDef;
       this.saveConfig(filePath, config);
-      console.log(`✅ [${label}] Servidor MCP '${name}' registrado com sucesso.`);
+      console.log(`[OK] [${label}] Servidor MCP '${name}' registrado com sucesso.`);
     }
 
     return serverDef;
@@ -256,7 +256,7 @@ Você pode disparar chamadas para os endpoints da API utilizando o script auxili
 `;
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillDoc, 'utf-8');
 
-    console.log(`✅ Conector de API '${name}' criado com sucesso!`);
+    console.log(`[OK] Conector de API '${name}' criado com sucesso!`);
     console.log(`   - MCP Server: mcp.json -> '${name}'`);
     console.log(`   - Skill com Script Auxiliar: ${path.join(skillDir, 'SKILL.md')}`);
   }

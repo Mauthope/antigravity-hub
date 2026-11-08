@@ -24,7 +24,7 @@ function getAgentsDir(): string {
 
 export async function POST(request: Request) {
   try {
-    const { url } = await request.json();
+    const { url, category: reqCategory } = await request.json();
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json({ error: 'URL do GitHub é obrigatória' }, { status: 400 });
@@ -166,7 +166,8 @@ export async function POST(request: Request) {
         .replace(/[^a-z0-9_-]/g, '-')
         .replace(/^-|-$/g, '') || 'github-agent';
     const fileName = `${agentName}.md`;
-    const details = parseAgentDetails(foundContent, agentName);
+    const details = parseAgentDetails(foundContent, agentName, reqCategory);
+    const category = reqCategory || details.category;
     const canonicalLicense = licenseResult.spdxId || licenseResult.license || 'MIT';
 
     // 3. Atomic Persistence into Neon PostgreSQL right inside /api/import-github!
@@ -181,6 +182,7 @@ export async function POST(request: Request) {
           title: details.title,
           content: foundContent,
           fileName,
+          category,
           sourceUrl: cleanUrl,
           license: canonicalLicense,
         });
@@ -212,6 +214,7 @@ export async function POST(request: Request) {
       name: agentName,
       title: details.title,
       fileName,
+      category,
       content: foundContent,
       license: canonicalLicense,
       spdxId: licenseResult.spdxId,
@@ -224,6 +227,7 @@ export async function POST(request: Request) {
         name: agentName,
         fileName,
         title: details.title,
+        category,
         whatItDoes: details.whatItDoes,
         whenToUse: details.whenToUse,
         tags: [...details.tags, canonicalLicense],

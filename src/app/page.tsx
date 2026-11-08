@@ -28,17 +28,21 @@ import {
   Cpu,
   AlertTriangle,
   HardDrive,
+  Search,
 } from 'lucide-react';
 import { GlassCapsuleButton } from '@/components/ui/glass-capsule-button';
 import { SquircleKpiCard } from '@/components/ui/squircle-kpi-card';
 import { TactilePillTabs } from '@/components/ui/tactile-pill-tabs';
 import { AkiomWallDock } from '@/components/ui/akiom-wall-dock';
+import { AGENT_CATEGORIES } from '@/types';
+import { detectAgentCategory } from '@/lib/db';
 
 interface AgentMd {
   id?: number;
   name: string;
   fileName: string;
   title: string;
+  category?: string;
   whatItDoes: string;
   whenToUse: string;
   tags?: string[];
@@ -69,10 +73,13 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [isDark, setIsDark] = useState(true);
   const [activeTab, setActiveTab] = useState<'all' | 'upload' | 'github'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Upload/Manual State
   const [uploadName, setUploadName] = useState('');
   const [uploadContent, setUploadContent] = useState('');
+  const [uploadCategory, setUploadCategory] = useState<string>('general');
   const [isSavingManual, setIsSavingManual] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{
     type: 'success' | 'warning' | 'error';
@@ -81,6 +88,7 @@ export default function HomePage() {
 
   // GitHub Import State
   const [githubUrl, setGithubUrl] = useState('');
+  const [githubCategory, setGithubCategory] = useState<string>('auto');
   const [isImporting, setIsImporting] = useState(false);
   const [githubStatus, setGithubStatus] = useState<{
     type: 'success' | 'warning' | 'error';
@@ -312,7 +320,9 @@ export default function HomePage() {
     reader.onload = (event) => {
       const text = event.target?.result as string;
       setUploadContent(text);
-      showToast(`Arquivo '${file.name}' carregado no formulario.`);
+      const autoCat = detectAgentCategory(baseName, text);
+      setUploadCategory(autoCat);
+      showToast(`Arquivo '${file.name}' carregado (Categoria detectada: ${getCategoryMeta(autoCat).label}).`);
     };
     reader.readAsText(file);
   };
@@ -340,6 +350,7 @@ export default function HomePage() {
         body: JSON.stringify({
           name: cleanName,
           content: uploadContent,
+          category: uploadCategory,
         }),
       });
 
@@ -400,7 +411,10 @@ export default function HomePage() {
       const res = await fetch('/api/import-github', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: githubUrl }),
+        body: JSON.stringify({
+          url: githubUrl,
+          category: githubCategory === 'auto' ? undefined : githubCategory,
+        }),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -410,6 +424,7 @@ export default function HomePage() {
           name: data.name,
           fileName: `${data.name}.md`,
           title: data.title,
+          category: data.category || (githubCategory === 'auto' ? undefined : githubCategory),
           whatItDoes: 'Agente importado do GitHub com licenca auditada.',
           whenToUse: 'Invoque no chat para executar tarefas desta especialidade.',
           tags: ['GitHub', data.license],
@@ -495,19 +510,110 @@ export default function HomePage() {
     URL.revokeObjectURL(url);
   };
 
-  const getAgentIcon = (name: string) => {
-    const lower = name.toLowerCase();
-    if (lower.includes('designer') || lower.includes('akiom')) {
-      return <Palette className="w-5 h-5 text-cyan-500" strokeWidth={2} />;
+  const getCategoryMeta = (catId?: string) => {
+    const clean = (catId || 'general').toLowerCase();
+    switch (clean) {
+      case 'design':
+        return {
+          id: 'design',
+          label: 'Design & UI/UX',
+          accent: 'cyan' as const,
+          badgeClass: 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/25',
+          icon: <Palette className="w-3.5 h-3.5 text-cyan-500 shrink-0" strokeWidth={2} />,
+          largeIcon: <Palette className="w-5 h-5 text-cyan-500" strokeWidth={2} />,
+        };
+      case 'development':
+        return {
+          id: 'development',
+          label: 'Desenvolvimento',
+          accent: 'emerald' as const,
+          badgeClass: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25',
+          icon: <Code2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" strokeWidth={2} />,
+          largeIcon: <Code2 className="w-5 h-5 text-emerald-500" strokeWidth={2} />,
+        };
+      case 'architecture':
+        return {
+          id: 'architecture',
+          label: 'Arquitetura & Cloud',
+          accent: 'violet' as const,
+          badgeClass: 'bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/25',
+          icon: <Cloud className="w-3.5 h-3.5 text-violet-500 shrink-0" strokeWidth={2} />,
+          largeIcon: <Cloud className="w-5 h-5 text-violet-500" strokeWidth={2} />,
+        };
+      case 'security':
+        return {
+          id: 'security',
+          label: 'Segurança & Review',
+          accent: 'rose' as const,
+          badgeClass: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/25',
+          icon: <ShieldCheck className="w-3.5 h-3.5 text-rose-500 shrink-0" strokeWidth={2} />,
+          largeIcon: <ShieldCheck className="w-5 h-5 text-rose-500" strokeWidth={2} />,
+        };
+      case 'data':
+        return {
+          id: 'data',
+          label: 'Dados & IA / ML',
+          accent: 'amber' as const,
+          badgeClass: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25',
+          icon: <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" strokeWidth={2} />,
+          largeIcon: <Sparkles className="w-5 h-5 text-amber-500" strokeWidth={2} />,
+        };
+      case 'orchestration':
+        return {
+          id: 'orchestration',
+          label: 'Orquestração & MCP',
+          accent: 'cyan' as const,
+          badgeClass: 'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/25',
+          icon: <Layers className="w-3.5 h-3.5 text-sky-500 shrink-0" strokeWidth={2} />,
+          largeIcon: <Layers className="w-5 h-5 text-sky-500" strokeWidth={2} />,
+        };
+      default:
+        return {
+          id: 'general',
+          label: 'Geral',
+          accent: 'slate' as const,
+          badgeClass: 'bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-500/25',
+          icon: <Bot className="w-3.5 h-3.5 text-blue-500 shrink-0" strokeWidth={2} />,
+          largeIcon: <Bot className="w-5 h-5 text-blue-500" strokeWidth={2} />,
+        };
     }
-    if (lower.includes('reviewer') || lower.includes('code')) {
-      return <Code2 className="w-5 h-5 text-indigo-500" strokeWidth={2} />;
-    }
-    if (lower.includes('architect') || lower.includes('cloud')) {
-      return <Cloud className="w-5 h-5 text-emerald-500" strokeWidth={2} />;
-    }
-    return <Bot className="w-5 h-5 text-blue-500" strokeWidth={2} />;
   };
+
+  const getAgentIcon = (name: string, category?: string) => {
+    return getCategoryMeta(category).largeIcon;
+  };
+
+  const categoryCounts: Record<string, number> = {
+    all: agents.length,
+    design: agents.filter((a) => (a.category || 'general') === 'design').length,
+    development: agents.filter((a) => (a.category || 'general') === 'development').length,
+    architecture: agents.filter((a) => (a.category || 'general') === 'architecture').length,
+    security: agents.filter((a) => (a.category || 'general') === 'security').length,
+    data: agents.filter((a) => (a.category || 'general') === 'data').length,
+    orchestration: agents.filter((a) => (a.category || 'general') === 'orchestration').length,
+    general: agents.filter((a) => (a.category || 'general') === 'general').length,
+  };
+
+  const activeCategoriesCount = Object.keys(categoryCounts).filter(
+    (k) => k !== 'all' && categoryCounts[k] > 0
+  ).length;
+
+  const filteredAgents = agents.filter((agent) => {
+    const cat = (agent.category || 'general').toLowerCase();
+    const matchesCat = selectedCategory === 'all' || cat === selectedCategory.toLowerCase();
+    if (!matchesCat) return false;
+
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return (
+      agent.name.toLowerCase().includes(q) ||
+      agent.title.toLowerCase().includes(q) ||
+      agent.chatCommand.toLowerCase().includes(q) ||
+      (agent.whatItDoes && agent.whatItDoes.toLowerCase().includes(q)) ||
+      (agent.category && agent.category.toLowerCase().includes(q)) ||
+      (agent.tags && agent.tags.some((t) => t.toLowerCase().includes(q)))
+    );
+  });
 
   const hasDbError = Boolean(dbDetails?.configured && !dbConnected);
   const localOnlyCount = agents.filter((a) => a.database !== 'Neon PostgreSQL').length;
@@ -683,6 +789,15 @@ export default function HomePage() {
           />
           <SquircleKpiCard
             badgeNumber={2}
+            title="Categorias Ativas"
+            value={activeCategoriesCount}
+            unit="de 7"
+            subtitle="Taxonomia Especializada"
+            icon={Layers}
+            color="cyan"
+          />
+          <SquircleKpiCard
+            badgeNumber={3}
             title="Banco Neon"
             value={dbConnected ? 'Conectado' : hasDbError ? 'Com Erro' : 'Cache Local'}
             unit=""
@@ -697,20 +812,11 @@ export default function HomePage() {
             color="emerald"
           />
           <SquircleKpiCard
-            badgeNumber={3}
-            title="Conformidade"
-            value="100%"
-            unit="seguro"
-            subtitle="Apenas MIT & Apache-2.0"
-            icon={ShieldCheck}
-            color="violet"
-          />
-          <SquircleKpiCard
             badgeNumber={4}
             title="Servidor MCP"
             value="Ativo"
             unit="JSON-RPC"
-            subtitle="list_agents & get_agent"
+            subtitle="Filtro por Categoria"
             icon={Cpu}
             color="amber"
           />
@@ -797,12 +903,48 @@ export default function HomePage() {
               </div>
 
               <div>
+                <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-heading font-bold uppercase tracking-wider text-[11px] flex items-center justify-between">
+                  <span>Categoria de Atuacao:</span>
+                  <span className="text-[10px] text-cyan-600 dark:text-cyan-400 font-mono font-bold">
+                    {getCategoryMeta(uploadCategory).label}
+                  </span>
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {AGENT_CATEGORIES.map((cat) => {
+                    const isSel = uploadCategory === cat.id;
+                    const meta = getCategoryMeta(cat.id);
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => setUploadCategory(cat.id)}
+                        className={`px-2.5 py-2 rounded-xl text-[11px] font-heading font-bold flex items-center gap-1.5 border transition-all cursor-pointer ${
+                          isSel
+                            ? 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border-cyan-500 shadow-sm'
+                            : 'bg-slate-100/70 dark:bg-slate-900/70 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:border-slate-300'
+                        }`}
+                      >
+                        {meta.icon}
+                        <span className="truncate">{cat.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
                 <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-heading font-bold uppercase tracking-wider text-[11px]">
                   Conteudo Markdown do Agente:
                 </label>
                 <textarea
                   value={uploadContent}
-                  onChange={(e) => setUploadContent(e.target.value)}
+                  onChange={(e) => {
+                    setUploadContent(e.target.value);
+                    if (e.target.value.length > 30 && uploadCategory === 'general') {
+                      const detected = detectAgentCategory(uploadName, e.target.value);
+                      if (detected !== 'general') setUploadCategory(detected);
+                    }
+                  }}
                   rows={4}
                   placeholder="# Titulo do Agente&#10;&#10;## O Que Este Agente Faz&#10;Explique de forma simples o objetivo...&#10;&#10;## Quando Usar&#10;Indique o momento de chamar no chat..."
                   className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-600 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500"
@@ -870,6 +1012,27 @@ export default function HomePage() {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-slate-700 dark:text-slate-300 mb-1.5 font-heading font-bold uppercase tracking-wider text-[11px] flex items-center justify-between">
+                    <span>Categoria:</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono font-bold">
+                      {githubCategory === 'auto' ? 'Detecção Automática' : getCategoryMeta(githubCategory).label}
+                    </span>
+                  </label>
+                  <select
+                    value={githubCategory}
+                    onChange={(e) => setGithubCategory(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-800 text-slate-900 dark:text-slate-100 text-xs font-heading font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                  >
+                    <option value="auto">Auto-detectar por palavras-chave e tópicos</option>
+                    {AGENT_CATEGORIES.map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.label} — {cat.description}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="p-4 rounded-2xl holographic-surface text-xs text-slate-800 dark:text-slate-200 space-y-2">
                   <span className="font-heading font-bold text-slate-900 dark:text-white uppercase tracking-wider text-[10px] block">
                     Regras de Auditoria Automatizada:
@@ -913,18 +1076,18 @@ export default function HomePage() {
           )}
         </section>
 
-        {/* SECTION: AGENT CARDS WITH SIMPLIFIED DESCRIPTIONS */}
+        {/* SECTION: AGENT CARDS WITH CATEGORIES AND SIMPLIFIED DESCRIPTIONS */}
         <section className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
             <div>
               <h2 className="font-heading font-black text-2xl text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
                 <span>Agentes Disponiveis</span>
                 <span className="text-sm font-heading font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20">
-                  {agents.length}
+                  {filteredAgents.length}{filteredAgents.length !== agents.length ? ` de ${agents.length}` : ''}
                 </span>
               </h2>
               <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-                Cada agente possui descricao simplificada de atuacao, origem de persistencia e comando rapido.
+                Organizados por especialidades taticas, prontos para invocacao direta no Antigravity via MCP.
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -954,9 +1117,100 @@ export default function HomePage() {
                   Limpar Catalogo
                 </button>
               )}
-              <span className="text-xs font-mono text-slate-400">
+              <span className="text-xs font-mono text-slate-400 hidden sm:inline">
                 Invocacao: digite <span className="text-cyan-600 dark:text-cyan-400 font-bold">/nome</span> no chat
               </span>
+            </div>
+          </div>
+
+          {/* TACTILE CATEGORY FILTER TABS & SEARCH BAR */}
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+            <div className="overflow-x-auto pb-1 max-w-full">
+              <TactilePillTabs
+                tabs={[
+                  {
+                    id: 'all',
+                    label: 'Todas',
+                    badge: categoryCounts.all,
+                    accent: 'cyan',
+                    icon: <Layers className="w-4 h-4" strokeWidth={2} />,
+                  },
+                  {
+                    id: 'design',
+                    label: 'Design & UI/UX',
+                    badge: categoryCounts.design,
+                    accent: 'cyan',
+                    icon: <Palette className="w-4 h-4" strokeWidth={2} />,
+                  },
+                  {
+                    id: 'development',
+                    label: 'Desenvolvimento',
+                    badge: categoryCounts.development,
+                    accent: 'emerald',
+                    icon: <Code2 className="w-4 h-4" strokeWidth={2} />,
+                  },
+                  {
+                    id: 'architecture',
+                    label: 'Arquitetura & Cloud',
+                    badge: categoryCounts.architecture,
+                    accent: 'violet',
+                    icon: <Cloud className="w-4 h-4" strokeWidth={2} />,
+                  },
+                  {
+                    id: 'security',
+                    label: 'Segurança & Review',
+                    badge: categoryCounts.security,
+                    accent: 'rose',
+                    icon: <ShieldCheck className="w-4 h-4" strokeWidth={2} />,
+                  },
+                  {
+                    id: 'data',
+                    label: 'Dados & IA',
+                    badge: categoryCounts.data,
+                    accent: 'amber',
+                    icon: <Sparkles className="w-4 h-4" strokeWidth={2} />,
+                  },
+                  {
+                    id: 'orchestration',
+                    label: 'Orquestração',
+                    badge: categoryCounts.orchestration,
+                    accent: 'cyan',
+                    icon: <Cpu className="w-4 h-4" strokeWidth={2} />,
+                  },
+                  {
+                    id: 'general',
+                    label: 'Geral',
+                    badge: categoryCounts.general,
+                    accent: 'slate',
+                    icon: <Bot className="w-4 h-4" strokeWidth={2} />,
+                  },
+                ]}
+                activeId={selectedCategory}
+                onChange={(id) => setSelectedCategory(id)}
+              />
+            </div>
+
+            <div className="relative min-w-[240px] sm:min-w-[280px]">
+              <Search
+                className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                strokeWidth={2}
+              />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Filtrar por nome, comando, tag..."
+                className="w-full pl-9 pr-8 py-2.5 rounded-full bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800/80 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 font-heading text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500 backdrop-blur-xl transition-all"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                  title="Limpar busca"
+                >
+                  <X className="w-3.5 h-3.5" strokeWidth={2} />
+                </button>
+              )}
             </div>
           </div>
 
@@ -980,27 +1234,59 @@ export default function HomePage() {
                 </p>
               </div>
             </div>
+          ) : filteredAgents.length === 0 ? (
+            <div className="glow-card p-12 text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-400 flex items-center justify-center mx-auto">
+                <Search className="w-7 h-7" strokeWidth={1.75} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-heading font-bold text-lg text-slate-900 dark:text-white">
+                  Nenhum Agente Encontrado Nesta Categoria
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
+                  Nao ha agentes cadastrados para os filtros aplicados (Categoria: &ldquo;{selectedCategory !== 'all' ? getCategoryMeta(selectedCategory).label : 'Todas'}&rdquo;{searchQuery ? `, Busca: "${searchQuery}"` : ''}).
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedCategory('all');
+                  setSearchQuery('');
+                }}
+                className="px-4 py-2 rounded-full bg-cyan-600 hover:bg-cyan-500 text-white font-heading font-bold text-xs transition-colors cursor-pointer"
+              >
+                Ver Todos os Agentes ({agents.length})
+              </button>
+            </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {agents.map((agent) => {
+              {filteredAgents.map((agent) => {
                 const isNeonSaved = agent.database === 'Neon PostgreSQL';
+                const catMeta = getCategoryMeta(agent.category);
                 return (
                   <div
                     key={agent.name}
                     className="glow-card p-6 flex flex-col justify-between space-y-5 group relative"
                   >
                     <div className="space-y-4">
-                      {/* Header with Icon, Slash Command & Storage Badge */}
+                      {/* Header with Icon, Slash Command, Category Badge & Storage Badge */}
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center shrink-0">
-                            {getAgentIcon(agent.name)}
+                            {catMeta.largeIcon}
                           </div>
                           <div>
                             <div className="flex flex-wrap items-center gap-1.5">
                               <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border border-cyan-500/25">
                                 {agent.chatCommand}
                               </span>
+                              <button
+                                onClick={() => setSelectedCategory(agent.category || 'general')}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-heading font-bold border transition-all cursor-pointer hover:scale-105 ${catMeta.badgeClass}`}
+                                title={`Filtrar apenas pela categoria ${catMeta.label}`}
+                              >
+                                {catMeta.icon}
+                                <span>{catMeta.label}</span>
+                              </button>
                               <span
                                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-heading font-bold border ${
                                   isNeonSaved
@@ -1132,11 +1418,22 @@ export default function HomePage() {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="glow-card max-w-3xl w-full p-6 sm:p-8 space-y-5 shadow-2xl flex flex-col max-h-[85vh]">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
-              <div>
-                <h3 className="font-heading font-bold text-base text-slate-900 dark:text-white">
-                  {previewAgent.fileName}
-                </h3>
-                <span className="text-xs text-slate-500 font-mono">{previewAgent.title}</span>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-heading font-bold text-base text-slate-900 dark:text-white">
+                    {previewAgent.fileName}
+                  </h3>
+                  {(() => {
+                    const meta = getCategoryMeta(previewAgent.category);
+                    return (
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-heading font-bold border ${meta.badgeClass}`}>
+                        {meta.icon}
+                        <span>{meta.label}</span>
+                      </span>
+                    );
+                  })()}
+                </div>
+                <span className="text-xs text-slate-500 font-mono block">{previewAgent.title}</span>
               </div>
               <button
                 onClick={() => setPreviewAgent(null)}

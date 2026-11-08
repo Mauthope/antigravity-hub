@@ -41,11 +41,15 @@ async function run() {
       title VARCHAR(255) NOT NULL,
       content TEXT NOT NULL,
       file_name VARCHAR(255) NOT NULL,
+      category VARCHAR(100) DEFAULT 'general',
       source_url VARCHAR(500),
       license VARCHAR(100),
       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
+  `;
+  await sql`
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'general';
   `;
 
   const result = await sql`SELECT current_database() as db, NOW() as now, count(*)::int as count FROM agents;`;

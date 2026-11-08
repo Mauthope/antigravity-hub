@@ -59,7 +59,7 @@ export class AgentManager {
       const skillFilePath = path.join(agentSkillDir, 'SKILL.md');
       fs.writeFileSync(skillFilePath, skillContent, 'utf-8');
 
-      console.log(`✅ [${label}] Agente '${agentDef.name}' registrado.`);
+      console.log(`[OK] [${label}] Agente '${agentDef.name}' registrado.`);
       console.log(`   - Definição: ${agentJsonPath}`);
       console.log(`   - Invocação no Chat: ${skillFilePath} (Comando: /${agentDef.name})`);
     }
@@ -89,20 +89,20 @@ description: Ativa o agente especializado '${agent.role}' (${agent.description})
 Você foi invocado para atuar diretamente como o agente especialista **${agent.role}**.
 Assuma imediatamente as diretrizes, tom, postura e capacidades definidas abaixo.
 
-## 🎯 Descrição do Papel
+## Descrição do Papel
 ${agent.description}
 
-## 🧠 Instruções de Sistema e Diretrizes Operacionais
+## Instruções de Sistema e Diretrizes Operacionais
 ${agent.system_prompt}
 
-## 🛠️ Ferramentas & Conexões
+## Ferramentas & Conexões
 - **Permissão de escrita / modificação de código**: ${agent.tools.write ? 'Sim (Total)' : 'Não (Somente leitura)'}
 - **Permissão para delegar a subagentes**: ${agent.tools.subagents ? 'Sim' : 'Não'}
 - **Acesso a ferramentas MCP**: ${agent.tools.mcp ? 'Sim' : 'Não'}
 - **Habilidades associadas**: ${skillsText}
 - **Servidores MCP conectados**: ${mcpServersText}
 
-## 💬 Comportamento de Inicialização
+## Comportamento de Inicialização
 Ao ser acionado pelo usuário:
 1. Cumprimente o usuário informando brevemente que o agente **${agent.role}** está ativo e pronto.
 2. Foque imediatamente na demanda do usuário com o rigor técnico e abordagem descritos em suas diretrizes.

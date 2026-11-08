@@ -16,9 +16,64 @@ export interface LicenseVerificationResult {
   rawUrl?: string;
 }
 
+export const AGENT_CATEGORIES = [
+  {
+    id: 'design',
+    label: 'Design & UI/UX',
+    description: 'Design systems, microinterações, prototipagem, CSS e interfaces fluidas.',
+    accent: 'cyan',
+    iconName: 'Palette',
+  },
+  {
+    id: 'development',
+    label: 'Desenvolvimento',
+    description: 'Engenharia de software, TypeScript, Next.js, APIs e regras de negócio.',
+    accent: 'emerald',
+    iconName: 'Code2',
+  },
+  {
+    id: 'architecture',
+    label: 'Arquitetura & Cloud',
+    description: 'Modelagem de bancos, Neon PostgreSQL, microsserviços e infraestrutura.',
+    accent: 'violet',
+    iconName: 'Cloud',
+  },
+  {
+    id: 'security',
+    label: 'Segurança & Review',
+    description: 'Auditoria de licenças 0% risco, OWASP, code review estrito e compliance.',
+    accent: 'rose',
+    iconName: 'ShieldCheck',
+  },
+  {
+    id: 'data',
+    label: 'Dados & IA / ML',
+    description: 'Modelos preditivos, TimesFM, machine learning, analytics e IA.',
+    accent: 'amber',
+    iconName: 'Sparkles',
+  },
+  {
+    id: 'orchestration',
+    label: 'Orquestração & MCP',
+    description: 'Coordenação de subagentes, conectores MCP e automação de fluxos.',
+    accent: 'cyan',
+    iconName: 'Layers',
+  },
+  {
+    id: 'general',
+    label: 'Geral',
+    description: 'Assistentes multifuncionais, produtividade geral e agentes personalizados.',
+    accent: 'slate',
+    iconName: 'Bot',
+  },
+] as const;
+
+export type AgentCategoryId = typeof AGENT_CATEGORIES[number]['id'];
+
 export const SkillFrontmatterSchema = z.object({
   name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/, 'Skill name must only contain alphanumeric characters, underscores or hyphens'),
   description: z.string().min(5, 'Description should be descriptive'),
+  category: z.string().optional(),
   license: z.string().optional(),
   author: z.string().optional(),
   repository: z.string().optional(),
@@ -42,6 +97,7 @@ export const AgentDefinitionSchema = z.object({
   role: z.string().min(3),
   description: z.string().min(5),
   system_prompt: z.string().min(10),
+  category: z.string().default('general'),
   tools: z.object({
     write: z.boolean().default(true),
     subagents: z.boolean().default(true),

@@ -28,7 +28,7 @@ function getAgentsDir(): string {
   }
 }
 
-export async function fetchAllAgents() {
+export async function fetchAllAgents(categoryFilter?: string) {
   const resolved = resolveDatabaseEnv();
 
   // 1. Try Neon Database first when configured
@@ -37,17 +37,23 @@ export async function fetchAllAgents() {
       await initDb();
       const sql = neon(resolved.connectionString);
       const rows = await sql`
-        SELECT name, title, content, file_name, source_url, license, created_at, updated_at
+        SELECT name, title, content, file_name, category, source_url, license, created_at, updated_at
         FROM agents
         ORDER BY id DESC;
       `;
 
-      return (rows || []).map((r) => {
-        const details = parseAgentDetails(String(r.content), String(r.name));
+      let list = (rows || []).map((r) => {
+        const details = parseAgentDetails(
+          String(r.content),
+          String(r.name),
+          r.category ? String(r.category) : undefined
+        );
+        const category = String(r.category || details.category || 'general');
         return {
           name: String(r.name),
           fileName: String(r.file_name),
           title: String(r.title || details.title),
+          category,
           whatItDoes: details.whatItDoes,
           whenToUse: details.whenToUse,
           content: String(r.content),
@@ -56,6 +62,12 @@ export async function fetchAllAgents() {
           storage: `Neon PostgreSQL (${resolved.databaseName})`,
         };
       });
+
+      if (categoryFilter && categoryFilter !== 'all') {
+        list = list.filter((a) => a.category === categoryFilter.toLowerCase().trim());
+      }
+
+      return list;
     } catch (err) {
       console.error('[MCP Server] Erro ao consultar Neon DB:', err);
       throw new Error(
@@ -72,7 +84,7 @@ export async function fetchAllAgents() {
     if (!fs.existsSync(dir)) return [];
 
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
-    return files
+    let list = files
       .map((fileName) => {
         try {
           const filePath = path.join(dir, fileName);
@@ -84,6 +96,7 @@ export async function fetchAllAgents() {
             name,
             fileName,
             title: details.title,
+            category: details.category,
             whatItDoes: details.whatItDoes,
             whenToUse: details.whenToUse,
             content,
@@ -93,7 +106,13 @@ export async function fetchAllAgents() {
           return null;
         }
       })
-      .filter(Boolean);
+      .filter(Boolean) as any[];
+
+    if (categoryFilter && categoryFilter !== 'all') {
+      list = list.filter((a) => a.category === categoryFilter.toLowerCase().trim());
+    }
+
+    return list;
   } catch {
     return [];
   }
@@ -110,18 +129,23 @@ export async function fetchAgentByName(name: string) {
     await initDb();
     const sql = neon(resolved.connectionString);
     const rows = await sql`
-      SELECT name, title, content, file_name, source_url, license
+      SELECT name, title, content, file_name, category, source_url, license
       FROM agents
       WHERE name = ${cleanName}
       LIMIT 1;
     `;
     if (rows && rows.length > 0) {
       const r = rows[0];
-      const details = parseAgentDetails(String(r.content), String(r.name));
+      const details = parseAgentDetails(
+        String(r.content),
+        String(r.name),
+        r.category ? String(r.category) : undefined
+      );
       return {
         name: String(r.name),
         fileName: String(r.file_name),
         title: String(r.title || details.title),
+        category: String(r.category || details.category || 'general'),
         whatItDoes: details.whatItDoes,
         whenToUse: details.whenToUse,
         content: String(r.content),
@@ -141,6 +165,7 @@ export async function fetchAgentByName(name: string) {
         name: cleanName,
         fileName: `${cleanName}.md`,
         title: details.title,
+        category: details.category,
         whatItDoes: details.whatItDoes,
         whenToUse: details.whenToUse,
         content,
@@ -159,7 +184,8 @@ export async function persistAgent(
   content: string,
   title?: string,
   license?: string,
-  sourceUrl?: string
+  sourceUrl?: string,
+  category?: string
 ) {
   const cleanName =
     name
@@ -167,8 +193,9 @@ export async function persistAgent(
       .replace(/[^a-z0-9_-]/g, '-')
       .replace(/^-|-$/g, '') || 'custom-agent';
   const fileName = `${cleanName}.md`;
-  const details = parseAgentDetails(content, cleanName);
+  const details = parseAgentDetails(content, cleanName, category);
   const finalTitle = title || details.title;
+  const finalCategory = category || details.category;
 
   const resolved = resolveDatabaseEnv();
   let savedInNeon = false;
@@ -179,6 +206,7 @@ export async function persistAgent(
       title: finalTitle,
       content,
       fileName,
+      category: finalCategory,
       sourceUrl: sourceUrl || null,
       license: license || null,
     });
@@ -196,6 +224,7 @@ export async function persistAgent(
     name: cleanName,
     fileName,
     title: finalTitle,
+    category: finalCategory,
     savedInNeon,
     savedIn: savedInNeon
       ? `Neon PostgreSQL (${resolved!.databaseName})`
@@ -235,22 +264,29 @@ export function createHubMcpServer() {
   // TOOL 1: list_agents
   server.tool(
     'list_agents',
-    'Lista todos os agentes salvos no Antigravity Hub com seus nomes, especialidades e orientações de uso.',
+    'Lista todos os agentes salvos no Antigravity Hub com seus nomes, categorias, especialidades e orientações de uso.',
     {
+      category: z
+        .string()
+        .optional()
+        .describe(
+          'Filtro opcional por categoria: design, development, architecture, security, data, orchestration, general'
+        ),
       search: z
         .string()
         .optional()
         .describe('Termo de busca opcional para filtrar agentes por nome ou capacidade'),
     },
-    async ({ search }) => {
+    async ({ category, search }) => {
       try {
-        let list = await fetchAllAgents();
+        let list = await fetchAllAgents(category);
         if (search) {
           const q = search.toLowerCase();
           list = list.filter(
             (a: any) =>
               a.name.toLowerCase().includes(q) ||
               a.title.toLowerCase().includes(q) ||
+              a.category.toLowerCase().includes(q) ||
               a.whatItDoes.toLowerCase().includes(q)
           );
         }
@@ -260,8 +296,8 @@ export function createHubMcpServer() {
             content: [
               {
                 type: 'text',
-                text: search
-                  ? `Nenhum agente encontrado correspondente a '${search}'.`
+                text: search || category
+                  ? `Nenhum agente encontrado correspondente aos filtros informados (busca: '${search || ''}', categoria: '${category || 'todas'}').`
                   : 'Nenhum agente cadastrado no momento no Hub. Voce pode salvar novos agentes com a ferramenta save_agent ou import_agent_github.',
               },
             ],
@@ -270,7 +306,7 @@ export function createHubMcpServer() {
 
         const summary = list
           .map((a: any) => {
-            return `- **${a.title}** (\`${a.name}\`)\n  - O que faz: ${a.whatItDoes}\n  - Quando usar: ${a.whenToUse}\n  - Armazenamento: ${a.storage}`;
+            return `- **${a.title}** (\`${a.name}\` | Categoria: \`${a.category}\`)\n  - O que faz: ${a.whatItDoes}\n  - Quando usar: ${a.whenToUse}\n  - Armazenamento: ${a.storage}`;
           })
           .join('\n\n');
 
@@ -322,7 +358,7 @@ export function createHubMcpServer() {
           content: [
             {
               type: 'text',
-              text: `# Instrucoes do Agente: ${agent.title} (\`${agent.name}\`)\nArmazenamento: ${agent.storage}\n\n${agent.content}`,
+              text: `# Instrucoes do Agente: ${agent.title} (\`${agent.name}\`)\n- Categoria: ${agent.category}\n- Armazenamento: ${agent.storage}\n\n${agent.content}`,
             },
           ],
         };
@@ -350,16 +386,22 @@ export function createHubMcpServer() {
         .describe('Identificador do agente em minusculas (kebab-case, ex: auditor-seguranca)'),
       content: z.string().describe('Conteudo completo das instrucoes e diretrizes em markdown (.md)'),
       title: z.string().optional().describe('Titulo legivel do agente (opcional)'),
+      category: z
+        .string()
+        .optional()
+        .describe(
+          'Categoria do agente (design, development, architecture, security, data, orchestration, general)'
+        ),
       license: z.string().optional().describe('Licenca do codigo (opcional, padrao MIT)'),
     },
-    async ({ name, content, title, license }) => {
+    async ({ name, content, title, category, license }) => {
       try {
-        const result = await persistAgent(name, content, title, license);
+        const result = await persistAgent(name, content, title, license, undefined, category);
         return {
           content: [
             {
               type: 'text',
-              text: `[OK] Agente '${result.name}' salvo com sucesso!\n- Titulo: ${result.title}\n- Arquivo: ${result.fileName}\n- Armazenamento: ${result.savedIn}`,
+              text: `[OK] Agente '${result.name}' salvo com sucesso!\n- Titulo: ${result.title}\n- Categoria: ${result.category}\n- Arquivo: ${result.fileName}\n- Armazenamento: ${result.savedIn}`,
             },
           ],
         };
@@ -385,8 +427,14 @@ export function createHubMcpServer() {
       url: z
         .string()
         .describe('URL do repositorio ou pasta no GitHub (ex: https://github.com/owner/repo)'),
+      category: z
+        .string()
+        .optional()
+        .describe(
+          'Categoria opcional para associar ao agente (design, development, architecture, security, data, orchestration, general)'
+        ),
     },
-    async ({ url }) => {
+    async ({ url, category }) => {
       try {
         const cleanUrl = url.trim();
         const match =
@@ -474,21 +522,22 @@ export function createHubMcpServer() {
         }
 
         const agentName = repo.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-        const details = parseAgentDetails(foundContent, agentName);
+        const details = parseAgentDetails(foundContent, agentName, category);
 
         const saved = await persistAgent(
           agentName,
           foundContent,
           details.title,
           licenseAudit.spdxId || licenseAudit.license,
-          cleanUrl
+          cleanUrl,
+          category || details.category
         );
 
         return {
           content: [
             {
               type: 'text',
-              text: `[OK] Agente importado com sucesso do GitHub!\n- Nome: ${saved.name}\n- Titulo: ${saved.title}\n- Licenca Auditada: ${licenseAudit.license} (${licenseAudit.spdxId}) — APROVADO\n- Armazenamento: ${saved.savedIn}`,
+              text: `[OK] Agente importado com sucesso do GitHub!\n- Nome: ${saved.name}\n- Titulo: ${saved.title}\n- Categoria: ${saved.category}\n- Licenca Auditada: ${licenseAudit.license} (${licenseAudit.spdxId}) — APROVADO\n- Armazenamento: ${saved.savedIn}`,
             },
           ],
         };

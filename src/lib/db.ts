@@ -6,6 +6,7 @@ export interface DbAgent {
   title: string;
   content: string;
   file_name: string;
+  category?: string | null;
   source_url?: string | null;
   license?: string | null;
   created_at?: string;
@@ -162,11 +163,15 @@ export async function initDb(): Promise<ResolvedDbEnv | null> {
         title VARCHAR(255) NOT NULL,
         content TEXT NOT NULL,
         file_name VARCHAR(255) NOT NULL,
+        category VARCHAR(100) DEFAULT 'general',
         source_url VARCHAR(500),
         license VARCHAR(100),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+    `;
+    await sql`
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS category VARCHAR(100) DEFAULT 'general';
     `;
     lastInitializedHostDb = cacheKey;
   }
@@ -174,7 +179,120 @@ export async function initDb(): Promise<ResolvedDbEnv | null> {
   return resolved;
 }
 
-export function parseAgentDetails(content: string, name: string) {
+export function detectAgentCategory(
+  name: string,
+  content: string,
+  explicitCategory?: string
+): string {
+  if (explicitCategory && explicitCategory.trim().length > 0) {
+    const clean = explicitCategory.trim().toLowerCase();
+    const valid = [
+      'design',
+      'development',
+      'architecture',
+      'security',
+      'data',
+      'orchestration',
+      'general',
+    ];
+    if (valid.includes(clean)) return clean;
+  }
+
+  // Check frontmatter category / categoria
+  const fmCatMatch = content.match(/^(?:category|categoria):\s*([a-zA-Z0-9_-]+)/im);
+  if (fmCatMatch) {
+    const rawCat = fmCatMatch[1].trim().toLowerCase();
+    const map: Record<string, string> = {
+      design: 'design',
+      ui: 'design',
+      ux: 'design',
+      frontend: 'design',
+      development: 'development',
+      dev: 'development',
+      codigo: 'development',
+      architecture: 'architecture',
+      cloud: 'architecture',
+      infra: 'architecture',
+      security: 'security',
+      seguranca: 'security',
+      review: 'security',
+      data: 'data',
+      dados: 'data',
+      ai: 'data',
+      ml: 'data',
+      orchestration: 'orchestration',
+      orquestracao: 'orchestration',
+      mcp: 'orchestration',
+      general: 'general',
+      geral: 'general',
+    };
+    if (map[rawCat]) return map[rawCat];
+  }
+
+  const textToScan = `${name} ${content.slice(0, 1500)}`.toLowerCase();
+
+  // 1. Design & UI/UX
+  if (
+    /(designer|akiom|ui\/ux|design-system|design system|tailwind|css|prototip|interface|responsiv|estil|paleta|figma|glassmorphism)/i.test(
+      textToScan
+    )
+  ) {
+    return 'design';
+  }
+
+  // 2. Security & Review
+  if (
+    /(security|seguranc|review|reviewer|owasp|auditor|pentest|compliance|vulnerabilidade|juridic|licenca|cve)/i.test(
+      textToScan
+    )
+  ) {
+    return 'security';
+  }
+
+  // 3. Architecture & Cloud
+  if (
+    /(architect|arquitet|cloud|neon|postgres|database|banco de dados|infra|devops|docker|kubernetes|aws|vercel|storage|microsservi)/i.test(
+      textToScan
+    )
+  ) {
+    return 'architecture';
+  }
+
+  // 4. Data & AI/ML
+  if (
+    /(timesfm|forecast|machine learning|deep learning|data science|dados|pandas|numpy|analytics|dataset|inteligencia artificial|redes neurais)/i.test(
+      textToScan
+    )
+  ) {
+    return 'data';
+  }
+
+  // 5. Orchestration & MCP
+  if (
+    /(orchestrat|orquestra|mcp|subagent|teamwork|sentinel|workflow|pipeline|maestro|coordenador)/i.test(
+      textToScan
+    )
+  ) {
+    return 'orchestration';
+  }
+
+  // 6. Development
+  if (
+    /(dev|developer|desenvolvedor|fullstack|backend|frontend|api|typescript|nextjs|react|javascript|python|codigo|software|engenhari)/i.test(
+      textToScan
+    )
+  ) {
+    return 'development';
+  }
+
+  return 'general';
+}
+
+export function parseAgentDetails(
+  content: string,
+  name: string,
+  explicitCategory?: string
+) {
   const titleMatch = content.match(/^#+\s*(.+)$/m);
   const title = titleMatch ? titleMatch[1].replace(/\(`.*`\)/, '').trim() : name;
 
@@ -199,19 +317,34 @@ export function parseAgentDetails(content: string, name: string) {
     ? whenMatch[1].trim()
     : 'Invoque no chat quando precisar de auxílio especializado nesta área.';
 
-  let tags = ['Agente Markdown'];
-  const lower = name.toLowerCase();
-  if (lower.includes('designer') || lower.includes('akiom')) {
-    tags = ['UI/UX', 'Design System', 'Responsividade', 'Zero Emojis'];
-  } else if (lower.includes('reviewer') || lower.includes('code')) {
-    tags = ['Clean Code', 'Segurança', 'OWASP', 'Qualidade'];
-  } else if (lower.includes('architect') || lower.includes('cloud')) {
-    tags = ['PostgreSQL', 'Neon', 'Microsserviços', 'Arquitetura'];
-  } else if (lower.includes('hub')) {
-    tags = ['Orquestrador', 'GitHub', 'Skills'];
+  const category = detectAgentCategory(name, content, explicitCategory);
+
+  let tags: string[] = [];
+  switch (category) {
+    case 'design':
+      tags = ['Design System', 'UI/UX', 'Akiom', 'Tailwind CSS'];
+      break;
+    case 'development':
+      tags = ['Fullstack', 'TypeScript', 'Clean Code', 'Engenharia'];
+      break;
+    case 'architecture':
+      tags = ['Arquitetura', 'Neon PostgreSQL', 'Cloud', 'Microsserviços'];
+      break;
+    case 'security':
+      tags = ['Segurança', 'Code Review', 'OWASP', 'Conformidade'];
+      break;
+    case 'data':
+      tags = ['Machine Learning', 'TimesFM', 'Análise Preditiva', 'Dados'];
+      break;
+    case 'orchestration':
+      tags = ['MCP Server', 'Orquestrador', 'Multi-Agente', 'Automação'];
+      break;
+    default:
+      tags = ['Agente Markdown', 'Produtividade', 'Especialista'];
+      break;
   }
 
-  return { title, whatItDoes, whenToUse, tags };
+  return { title, whatItDoes, whenToUse, tags, category };
 }
 
 export async function upsertAgentInDb(params: {
@@ -219,6 +352,7 @@ export async function upsertAgentInDb(params: {
   title: string;
   content: string;
   fileName: string;
+  category?: string | null;
   sourceUrl?: string | null;
   license?: string | null;
 }): Promise<{ row: DbAgent; dbMeta: ResolvedDbEnv }> {
@@ -227,14 +361,17 @@ export async function upsertAgentInDb(params: {
     throw new Error('Nenhuma variável de conexão com o Neon encontrada no ambiente.');
   }
 
+  const category = params.category || detectAgentCategory(params.name, params.content);
+
   const sql = neon(resolved.connectionString);
   const rows = await sql`
-    INSERT INTO agents (name, title, content, file_name, source_url, license, updated_at)
+    INSERT INTO agents (name, title, content, file_name, category, source_url, license, updated_at)
     VALUES (
       ${params.name},
       ${params.title},
       ${params.content},
       ${params.fileName},
+      ${category},
       ${params.sourceUrl || null},
       ${params.license || null},
       CURRENT_TIMESTAMP
@@ -243,10 +380,11 @@ export async function upsertAgentInDb(params: {
       title = EXCLUDED.title,
       content = EXCLUDED.content,
       file_name = EXCLUDED.file_name,
+      category = COALESCE(EXCLUDED.category, agents.category, 'general'),
       source_url = COALESCE(EXCLUDED.source_url, agents.source_url),
       license = COALESCE(EXCLUDED.license, agents.license),
       updated_at = CURRENT_TIMESTAMP
-    RETURNING id, name, title, content, file_name, source_url, license, created_at, updated_at;
+    RETURNING id, name, title, content, file_name, category, source_url, license, created_at, updated_at;
   `;
 
   if (!rows || rows.length === 0) {

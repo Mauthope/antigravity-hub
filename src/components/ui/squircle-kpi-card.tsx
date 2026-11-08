@@ -5,7 +5,7 @@ import type { LucideIcon } from 'lucide-react';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type SquircleColor = 'blue' | 'emerald' | 'amber' | 'violet';
+export type SquircleColor = 'blue' | 'emerald' | 'amber' | 'violet' | 'cyan';
 
 interface SquircleKpiCardProps {
   badgeNumber: number;
@@ -31,6 +31,10 @@ export function SquircleKpiCard({
   onClick,
 }: SquircleKpiCardProps) {
   const squircleStyles: Record<SquircleColor, { box: string; pill: string }> = {
+    cyan: {
+      box: 'bg-gradient-to-br from-cyan-400 via-sky-500 to-blue-600 shadow-[0_14px_28px_-6px_rgba(14,165,233,0.55),inset_0_2px_3px_rgba(255,255,255,0.55)]',
+      pill: 'bg-cyan-600 text-white border-2 border-white dark:border-slate-900',
+    },
     blue: {
       box: 'bg-gradient-to-br from-blue-500 via-indigo-500 to-cyan-500 shadow-[0_14px_28px_-6px_rgba(59,130,246,0.55),inset_0_2px_3px_rgba(255,255,255,0.55)]',
       pill: 'bg-indigo-600 text-white border-2 border-white dark:border-slate-900',

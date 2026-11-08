@@ -6,13 +6,15 @@ import { neon } from '@neondatabase/serverless';
 import {
   initDb,
   parseAgentDetails,
+  detectAgentCategory,
   resolveDatabaseEnv,
   upsertAgentInDb,
 } from '@/lib/db';
+import { AGENT_CATEGORIES } from '@/types';
 
 export const dynamic = 'force-dynamic';
 
-export { parseAgentDetails };
+export { parseAgentDetails, detectAgentCategory, AGENT_CATEGORIES };
 
 function getAgentsDir(): string {
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
@@ -42,7 +44,11 @@ function ensureAgentsDir(): string {
   return dir;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const categoryFilter = searchParams.get('category');
+  const searchQuery = searchParams.get('q')?.toLowerCase();
+
   const resolved = resolveDatabaseEnv();
   let dbError: string | undefined;
 
@@ -52,18 +58,24 @@ export async function GET() {
       await initDb();
       const sql = neon(resolved.connectionString);
       const rows = await sql`
-        SELECT id, name, title, content, file_name, source_url, license, created_at, updated_at
+        SELECT id, name, title, content, file_name, category, source_url, license, created_at, updated_at
         FROM agents
         ORDER BY id DESC;
       `;
 
-      const agents = (rows || []).map((r) => {
-        const details = parseAgentDetails(String(r.content), String(r.name));
+      let allAgents = (rows || []).map((r) => {
+        const details = parseAgentDetails(
+          String(r.content),
+          String(r.name),
+          r.category ? String(r.category) : undefined
+        );
+        const category = String(r.category || details.category || 'general');
         return {
           id: r.id,
           name: r.name,
           fileName: r.file_name,
           title: r.title || details.title,
+          category,
           whatItDoes: details.whatItDoes,
           whenToUse: details.whenToUse,
           tags: details.tags,
@@ -75,9 +87,32 @@ export async function GET() {
         };
       });
 
+      // Contagem por categoria antes do filtro
+      const categoryCounts: Record<string, number> = { all: allAgents.length };
+      for (const cat of AGENT_CATEGORIES) {
+        categoryCounts[cat.id] = allAgents.filter((a) => a.category === cat.id).length;
+      }
+
+      let filtered = allAgents;
+      if (categoryFilter && categoryFilter !== 'all') {
+        filtered = filtered.filter((a) => a.category === categoryFilter);
+      }
+      if (searchQuery) {
+        filtered = filtered.filter(
+          (a) =>
+            a.name.toLowerCase().includes(searchQuery) ||
+            a.title.toLowerCase().includes(searchQuery) ||
+            a.whatItDoes.toLowerCase().includes(searchQuery) ||
+            a.category.toLowerCase().includes(searchQuery)
+        );
+      }
+
       return NextResponse.json(
         {
-          agents,
+          agents: filtered,
+          allCount: allAgents.length,
+          categories: AGENT_CATEGORIES,
+          categoryCounts,
           databaseConnected: true,
           databaseConfigured: true,
           dbMeta: {
@@ -97,11 +132,11 @@ export async function GET() {
   // 2. Fallback to local files in agents/ (with databaseConnected strictly false!)
   try {
     const dir = ensureAgentsDir();
-    let agents: unknown[] = [];
+    let allAgents: any[] = [];
 
     if (fs.existsSync(dir)) {
       const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
-      agents = files
+      allAgents = files
         .map((fileName) => {
           try {
             const filePath = path.join(/*turbopackIgnore: true*/ dir, fileName);
@@ -113,6 +148,7 @@ export async function GET() {
               name,
               fileName,
               title: details.title,
+              category: details.category,
               whatItDoes: details.whatItDoes,
               whenToUse: details.whenToUse,
               tags: details.tags,
@@ -127,9 +163,31 @@ export async function GET() {
         .filter(Boolean);
     }
 
+    const categoryCounts: Record<string, number> = { all: allAgents.length };
+    for (const cat of AGENT_CATEGORIES) {
+      categoryCounts[cat.id] = allAgents.filter((a) => a.category === cat.id).length;
+    }
+
+    let filtered = allAgents;
+    if (categoryFilter && categoryFilter !== 'all') {
+      filtered = filtered.filter((a) => a.category === categoryFilter);
+    }
+    if (searchQuery) {
+      filtered = filtered.filter(
+        (a) =>
+          a.name.toLowerCase().includes(searchQuery) ||
+          a.title.toLowerCase().includes(searchQuery) ||
+          a.whatItDoes.toLowerCase().includes(searchQuery) ||
+          a.category.toLowerCase().includes(searchQuery)
+      );
+    }
+
     return NextResponse.json(
       {
-        agents,
+        agents: filtered,
+        allCount: allAgents.length,
+        categories: AGENT_CATEGORIES,
+        categoryCounts,
         databaseConnected: false,
         databaseConfigured: Boolean(resolved),
         dbError,
@@ -147,6 +205,9 @@ export async function GET() {
     return NextResponse.json(
       {
         agents: [],
+        allCount: 0,
+        categories: AGENT_CATEGORIES,
+        categoryCounts: { all: 0 },
         databaseConnected: false,
         databaseConfigured: Boolean(resolved),
         dbError,
@@ -182,13 +243,15 @@ export async function POST(request: Request) {
             .replace(/[^a-z0-9_-]/g, '-')
             .replace(/^-|-$/g, '') || 'custom-agent';
         const fileName = `${cleanName}.md`;
-        const details = parseAgentDetails(String(item.content), cleanName);
+        const details = parseAgentDetails(String(item.content), cleanName, item.category);
+        const category = item.category || details.category;
 
         const { row } = await upsertAgentInDb({
           name: cleanName,
           title: item.title || details.title,
           content: String(item.content),
           fileName,
+          category,
           sourceUrl: item.sourceUrl || null,
           license: item.license || null,
         });
@@ -198,6 +261,7 @@ export async function POST(request: Request) {
           name: row.name,
           fileName: row.file_name,
           title: row.title || details.title,
+          category: row.category || category,
           whatItDoes: details.whatItDoes,
           whenToUse: details.whenToUse,
           tags: details.tags,
@@ -217,7 +281,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const { name, content, sourceUrl, license } = body;
+    const { name, content, category: reqCategory, sourceUrl, license } = body;
 
     if (!name || !content) {
       return NextResponse.json(
@@ -232,7 +296,8 @@ export async function POST(request: Request) {
         .replace(/[^a-z0-9_-]/g, '-')
         .replace(/^-|-$/g, '') || 'custom-agent';
     const fileName = `${cleanName}.md`;
-    const details = parseAgentDetails(String(content), cleanName);
+    const details = parseAgentDetails(String(content), cleanName, reqCategory);
+    const category = reqCategory || details.category;
 
     let savedInNeon = false;
     let dbRowId: number | undefined;
@@ -245,6 +310,7 @@ export async function POST(request: Request) {
           title: details.title,
           content: String(content),
           fileName,
+          category,
           sourceUrl: sourceUrl || null,
           license: license || null,
         });
@@ -286,6 +352,7 @@ export async function POST(request: Request) {
           name: cleanName,
           fileName,
           title: details.title,
+          category,
           whatItDoes: details.whatItDoes,
           whenToUse: details.whenToUse,
           tags: details.tags,

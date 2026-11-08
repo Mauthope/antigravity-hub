@@ -7,7 +7,7 @@ export interface TactileTabItem {
   id: string;
   label: string;
   badge?: string | number;
-  accent: "cyan" | "violet" | "amber" | "rose" | "emerald";
+  accent: "cyan" | "violet" | "amber" | "rose" | "emerald" | "slate" | "indigo";
   icon?: React.ReactNode;
 }
 
@@ -25,6 +25,8 @@ export function TactilePillTabs({ tabs, activeId, onChange, className }: Tactile
     amber: "bg-gradient-to-b from-amber-300 via-amber-400 to-orange-500 text-slate-950 shadow-[0_10px_22px_-4px_rgba(245,158,11,0.55),inset_0_2px_2px_rgba(255,255,255,0.75)] border-amber-200/80",
     rose: "bg-gradient-to-b from-pink-400 via-rose-500 to-red-600 text-white shadow-[0_10px_22px_-4px_rgba(244,63,94,0.6),inset_0_2px_2px_rgba(255,255,255,0.65)] border-rose-300/60",
     emerald: "bg-gradient-to-b from-emerald-400 via-emerald-500 to-teal-600 text-white shadow-[0_10px_22px_-4px_rgba(16,185,129,0.6),inset_0_2px_2px_rgba(255,255,255,0.65)] border-emerald-300/60",
+    slate: "bg-gradient-to-b from-slate-600 via-slate-700 to-slate-900 text-white shadow-[0_10px_22px_-4px_rgba(71,85,105,0.6),inset_0_2px_2px_rgba(255,255,255,0.4)] border-slate-500/60",
+    indigo: "bg-gradient-to-b from-indigo-500 via-indigo-600 to-indigo-800 text-white shadow-[0_10px_22px_-4px_rgba(99,102,241,0.6),inset_0_2px_2px_rgba(255,255,255,0.65)] border-indigo-400/60",
   };
 
   return (
